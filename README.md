@@ -14,8 +14,33 @@ reads `.d64` disk images and even serves files to games while they run. The C64 
 └─────────────┘            └─────────┘               └─────────────────────┘       └─────────────┘
 ```
 
+## Screenshots
+
+**On the C64:** the menu, a SID tune playing in the background, the tune's info screen, a photo converted to
+multicolor, and the startup screen. These are pixel-exact renderings of what the browser shows: the server's real
+screen data, drawn with the C64's character set, colors and border.
+
+| Programs menu | Music with the time display |
+|:---:|:---:|
+| ![Programs menu on the C64](docs/images/c64-programs.png) | ![Music menu with a tune playing](docs/images/c64-music.png) |
+| **Info screen of a tune** (RETURN) | **A picture, converted by the server** |
+| ![Info screen of a SID tune](docs/images/c64-sid-info.png) | ![A picture on the C64](docs/images/c64-picture.png) |
+| **Startup screen** (address remembered on disk) | |
+| ![Startup screen](docs/images/c64-startup.png) | |
+
+**The web UI** at `http://localhost:6464/`:
+
+![Programs in the web UI](docs/images/web-programs.jpg)
+
+| Picture preview: the original and the C64 version | SID info and PLAY ON C64 |
+|:---:|:---:|
+| ![Picture preview](docs/images/web-pictures.jpg) | ![SID info](docs/images/web-music.jpg) |
+
+![Activity log](docs/images/web-activity.jpg)
+
 ## Contents
 
+- [Screenshots](#screenshots)
 - [What it can do](#what-it-can-do)
 - [Requirements](#requirements)
 - [Getting started](#getting-started)

@@ -324,6 +324,8 @@ save_entry:
 
 change_server:
     jsr stop_music                      ; the startup code comes back where a tune may be
+    lda #1                              ; the address screen has no entry letters
+    sta info_shown
     lda #<startup_stash
     sta copy_source
     lda #>startup_stash
@@ -1265,6 +1267,8 @@ apply_colors:
     dex
     bpl -
 
+    lda info_shown                      ; entry letters: only on a menu screen
+    bne ++
     lda #<(color_ram + 2*40 + 1)        ; entry letters: yellow (rows 2-21, column 1)
     sta letter_color+1
     lda #>(color_ram + 2*40 + 1)
@@ -1281,7 +1285,7 @@ letter_color:
     inc letter_color+2
 +   dex
     bne -
-    rts
+++  rts
 
 clear_screen:
     ldx #0
@@ -1373,7 +1377,7 @@ tune_entry:     !byte 0
 menu_count:     !byte 0                 ; received together: entries, pages, parent folder
 menu_pages:     !byte 1
 menu_parent:    !word 0
-info_shown:     !byte 0
+info_shown:     !byte 1                 ; not a menu screen: the info screen or the startup screen
 polling:        !byte 0                 ; check for pushed programs
 checking:       !byte 0                 ; a background check is running
 check_delay:    !byte 0                 ; checks to skip after a failed one
