@@ -1,0 +1,16 @@
+# Build output
+build/
+server/bin/
+server/obj/
+
+# IDE and OS files
+.idea/
+.vs/
+.vscode/
+*.user
+.DS_Store
+
+# Your own files (games, pictures, music): only the empty section folders are in the repository
+content/**
+!content/*/
+!content/*/.gitkeep

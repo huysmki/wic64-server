@@ -1,0 +1,284 @@
+/* WiC64 Server web UI, styled after the C64's own screen:
+   a light blue border around a blue screen, light blue text, reverse video for selections. */
+
+:root {
+  color-scheme: dark;
+
+  /* "Pepto" PAL palette, the same colors the server uses for pictures */
+  --c64-black: #000000;
+  --c64-white: #ffffff;
+  --c64-red: #68372b;
+  --c64-cyan: #70a4b2;
+  --c64-purple: #6f3d86;
+  --c64-green: #588d43;
+  --c64-blue: #352879;
+  --c64-yellow: #b8c76f;
+  --c64-orange: #6f4f25;
+  --c64-brown: #433900;
+  --c64-light-red: #9a6759;
+  --c64-dark-grey: #444444;
+  --c64-grey: #6c6c6c;
+  --c64-light-green: #9ad284;
+  --c64-light-blue: #6c5eb5;
+  --c64-light-grey: #959595;
+
+  --border: var(--c64-light-blue);
+  --screen: var(--c64-blue);
+  --text: #a79ff0;               /* the light blue text, a bit brighter so it reads well on today's screens */
+  --text-dim: #8277d0;
+  --line: #4a3d98;
+
+  --pixel: "Press Start 2P", ui-monospace, monospace;
+  --terminal: "VT323", ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+* { box-sizing: border-box; }
+
+html { background: var(--border); }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  padding: clamp(12px, 4vw, 48px);
+  background: var(--border);
+  color: var(--text);
+  font: 22px/1.15 var(--terminal);
+}
+
+.screen {
+  position: relative;
+  max-width: 1280px;
+  margin: 0 auto;
+  min-height: calc(100vh - 2 * clamp(12px, 4vw, 48px));
+  background: var(--screen);
+  padding: 24px clamp(14px, 3vw, 32px) 40px;
+  overflow: hidden;
+}
+
+/* a whisper of CRT scanlines */
+.screen::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(to bottom, rgb(0 0 0 / 0%) 0 2px, rgb(0 0 0 / 7%) 2px 3px);
+}
+
+.hidden { display: none !important; }
+
+/* ---------------------------------------------------------------------------
+   Boot screen header */
+
+.boot { text-align: center; margin-bottom: 20px; }
+.boot p { margin: 0; }
+.banner { font: 16px/2 var(--pixel); letter-spacing: 1px; }
+.sysline { font-size: 22px; margin-top: 4px !important; overflow-wrap: anywhere; }
+.sysline.small { font-size: 18px; color: var(--text-dim); }
+.sysline code { font: inherit; color: var(--c64-white); }
+.sep { margin: 0 10px; color: var(--text-dim); }
+#c64-status .dot { display: inline-block; width: 12px; height: 12px; margin-right: 8px; background: var(--c64-light-red); vertical-align: 0; }
+#c64-status.online .dot { background: var(--c64-light-green); }
+#c64-status.online .text { color: var(--c64-light-green); }
+
+.ready { text-align: left; font: 14px/2 var(--pixel); margin-top: 18px !important; }
+.cursor {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin-left: 2px;
+  vertical-align: -2px;
+  background: var(--text);
+  animation: blink 1.07s steps(1) infinite;
+}
+@keyframes blink { 50% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .cursor { animation: none; } }
+
+.pushbar {
+  display: flex; gap: 14px; align-items: center; justify-content: space-between;
+  margin-top: 12px; padding: 6px 12px;
+  background: var(--c64-yellow); color: var(--c64-blue);
+  text-align: left;
+}
+.pushbar .key { background: var(--c64-blue); color: var(--c64-yellow); }
+
+/* ---------------------------------------------------------------------------
+   Keys: reverse video, like selected text on the C64 */
+
+button, .key {
+  font: 11px/1 var(--pixel);
+  letter-spacing: 0.5px;
+  border: none;
+  border-radius: 0;
+  padding: 8px 10px;
+  background: var(--text);
+  color: var(--screen);
+  cursor: pointer;
+  white-space: nowrap;
+}
+button:hover, .key:hover { background: var(--c64-white); }
+button:focus-visible, .key:focus-within, input:focus-visible {
+  outline: 3px solid var(--c64-white);
+  outline-offset: 2px;
+}
+.key.primary { background: var(--c64-light-green); color: var(--c64-black); }
+.key.primary:hover { background: var(--c64-white); }
+.key.danger { background: var(--c64-light-red); color: var(--c64-white); }
+.key.danger:hover { background: var(--c64-red); }
+button.small { font-size: 9px; padding: 6px 8px; }
+button:disabled { opacity: 0.4; cursor: default; }
+
+kbd {
+  font: inherit;
+  padding: 3px 4px;
+  margin-right: 4px;
+  background: var(--screen);
+  color: var(--text);
+}
+
+/* ---------------------------------------------------------------------------
+   Tabs as function keys */
+
+.tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; border-bottom: 3px solid var(--text); padding-bottom: 12px; }
+.tabs button { background: transparent; color: var(--text); padding: 8px 10px; }
+.tabs button kbd { background: var(--text); color: var(--screen); }
+.tabs button:hover { background: var(--line); }
+.tabs button[aria-selected="true"] { background: var(--text); color: var(--screen); }
+.tabs button[aria-selected="true"] kbd { background: var(--screen); color: var(--text); }
+.badge {
+  display: inline-block; min-width: 18px; padding: 3px 4px; margin-left: 4px;
+  background: var(--c64-light-red); color: var(--c64-white); text-align: center;
+}
+
+/* ---------------------------------------------------------------------------
+   File browser */
+
+.toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.breadcrumb { display: flex; flex-wrap: wrap; gap: 4px; list-style: none; margin: 0; padding: 0; font-size: 26px; }
+.breadcrumb li + li::before { content: "/"; margin-right: 4px; color: var(--text-dim); }
+.breadcrumb button { font: inherit; letter-spacing: 0; background: none; color: var(--c64-cyan); padding: 0 2px; text-decoration: underline; text-underline-offset: 4px; }
+.breadcrumb button:hover { background: var(--text); color: var(--screen); }
+.breadcrumb li:last-child button { color: var(--c64-white); text-decoration: none; cursor: default; }
+.breadcrumb li:last-child button:hover { background: none; color: var(--c64-white); }
+
+.dropzone { position: relative; border: 3px solid var(--text); overflow-x: auto; }
+.drop-hint {
+  display: none; position: absolute; inset: 0; align-items: center; justify-content: center;
+  background: rgb(53 40 121 / 90%); outline: 3px dashed var(--c64-light-green); outline-offset: -12px;
+  font: 14px/1 var(--pixel); color: var(--c64-light-green);
+}
+.dropzone.dragging .drop-hint { display: flex; }
+
+table.files { width: 100%; border-collapse: collapse; }
+.files th {
+  text-align: left; font: 9px/1 var(--pixel); letter-spacing: 1px;
+  padding: 12px 10px; background: var(--text); color: var(--screen);
+}
+.files td { padding: 6px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.files tr:last-child td { border-bottom: none; }
+.files tbody tr:hover { background: var(--line); }
+.files .name { color: var(--c64-white); overflow-wrap: anywhere; }
+.files .name button {
+  font: inherit; letter-spacing: 0; padding: 0; background: none;
+  color: var(--c64-cyan); text-align: left; text-decoration: underline; text-underline-offset: 4px;
+}
+.files .name button:hover { background: var(--c64-cyan); color: var(--screen); }
+.files .details { color: var(--text); }
+.files .size { color: var(--text-dim); white-space: nowrap; text-align: right; }
+.col-kind { width: 70px; }
+.col-size { width: 96px; text-align: right !important; }
+.col-actions { width: 1%; }
+.row-actions { display: flex; gap: 6px; justify-content: flex-end; }
+
+/* file types in C64 colors */
+.kind { display: inline-block; min-width: 44px; padding: 4px 0; font: 9px/1 var(--pixel); text-align: center; }
+.kind.folder  { background: var(--c64-cyan); color: var(--c64-black); }
+.kind.disk    { background: var(--c64-orange); color: var(--c64-yellow); }
+.kind.program { background: var(--c64-light-green); color: var(--c64-black); }
+.kind.picture { background: var(--c64-yellow); color: var(--c64-black); }
+.kind.tune    { background: var(--c64-purple); color: var(--c64-white); }
+.kind.other   { background: var(--c64-dark-grey); color: var(--c64-light-grey); }
+
+.empty { color: var(--text-dim); padding: 28px; text-align: center; margin: 0; }
+.hint { color: var(--text-dim); font-size: 20px; margin: 14px 0 0; }
+
+/* ---------------------------------------------------------------------------
+   Activity */
+
+.activity { list-style: none; margin: 0; padding: 0; border: 3px solid var(--text); }
+.activity li { display: grid; grid-template-columns: 96px 96px 1fr; gap: 12px; padding: 5px 12px; border-bottom: 1px solid var(--line); align-items: center; }
+.activity li:last-child { border-bottom: none; }
+.activity time { color: var(--text-dim); }
+.activity .kind { min-width: 88px; text-transform: uppercase; }
+.kind.menu, .kind.files { background: var(--c64-grey); color: var(--c64-white); }
+.kind.push              { background: var(--c64-yellow); color: var(--c64-black); }
+.kind.load              { background: var(--c64-cyan); color: var(--c64-black); }
+.kind.music             { background: var(--c64-purple); color: var(--c64-white); }
+.kind.error             { background: var(--c64-light-red); color: var(--c64-white); }
+.activity li > span:last-child { color: var(--c64-white); }
+
+/* ---------------------------------------------------------------------------
+   Preview panel: a second C64 screen sliding in */
+
+.preview {
+  position: fixed; top: 0; right: 0; bottom: 0; width: min(600px, 100vw);
+  background: var(--screen);
+  border-left: 16px solid var(--border);
+  box-shadow: -8px 0 0 rgb(0 0 0 / 25%);
+  overflow-y: auto; z-index: 10; padding: 20px 22px 36px;
+}
+.preview-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 14px; }
+.preview h2 { margin: 0; font: 12px/1.6 var(--pixel); color: var(--c64-white); overflow-wrap: anywhere; }
+.preview h3 { font: 9px/1.6 var(--pixel); letter-spacing: 1px; text-transform: uppercase; color: var(--text); margin: 22px 0 10px; }
+.preview-actions { display: flex; gap: 8px; margin-bottom: 16px; }
+.pictures { display: grid; gap: 16px; }
+.pictures figure { margin: 0; }
+.pictures img { width: 100%; display: block; background: var(--c64-black); border: 3px solid var(--text); }
+.pictures img.c64 { image-rendering: pixelated; aspect-ratio: 320 / 200; }
+.pictures figcaption { color: var(--text-dim); margin-top: 6px; }
+dl.facts { display: grid; grid-template-columns: max-content 1fr; gap: 4px 18px; margin: 0; }
+dl.facts dt { color: var(--text-dim); text-transform: uppercase; }
+dl.facts dd { margin: 0; color: var(--c64-white); overflow-wrap: anywhere; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { padding: 2px 8px; background: var(--line); color: var(--c64-white); }
+.note { padding: 8px 12px; margin-top: 14px; background: var(--line); color: var(--c64-white); }
+.note.warn { background: var(--c64-yellow); color: var(--c64-black); }
+.note.error { background: var(--c64-light-red); color: var(--c64-white); }
+.mono { font-family: var(--terminal); }
+
+/* ---------------------------------------------------------------------------
+   Dialogs: a boxed window on the screen */
+
+dialog {
+  border: 3px solid var(--text);
+  outline: 12px solid var(--border);
+  border-radius: 0;
+  background: var(--screen); color: var(--text);
+  padding: 22px; width: min(460px, calc(100vw - 48px));
+}
+dialog::backdrop { background: rgb(0 0 0 / 55%); }
+dialog h2 { margin: 0 0 14px; font: 11px/1.6 var(--pixel); color: var(--c64-white); }
+dialog p { margin: 0; }
+dialog input {
+  width: 100%; font: inherit; padding: 6px 10px; border: none; border-radius: 0;
+  background: var(--text); color: var(--screen); caret-color: var(--screen);
+}
+.dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+
+/* ---------------------------------------------------------------------------
+   Toasts: like the C64's status line */
+
+.toasts { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); display: grid; gap: 8px; z-index: 20; width: min(560px, calc(100vw - 32px)); }
+.toast { padding: 8px 14px; background: var(--text); color: var(--screen); box-shadow: 6px 6px 0 rgb(0 0 0 / 35%); }
+.toast.error { background: var(--c64-light-red); color: var(--c64-white); }
+.toast::before { content: "READY. "; font: 9px/1 var(--pixel); margin-right: 6px; vertical-align: 2px; }
+.toast.error::before { content: "?ERROR "; }
+
+@media (max-width: 760px) {
+  body { font-size: 20px; }
+  .col-details, .files td.details, .col-size, .files td.size { display: none; }
+  .row-actions { flex-wrap: wrap; }
+  .activity li { grid-template-columns: 80px 1fr; }
+  .activity li time { grid-row: span 2; }
+}

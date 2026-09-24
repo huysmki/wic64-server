@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WiC64 Server</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap">
+  <link rel="stylesheet" href="ui/app.css">
+</head>
+<body>
+  <div class="screen">
+    <header class="boot">
+      <p class="banner">**** WIC64 SERVER V1 ****</p>
+      <p class="sysline">
+        <span id="address-status" title="Type this address on the C64's startup screen"></span>
+        <span class="sep">·</span>
+        <span id="c64-status"><span class="dot"></span><span class="text">C64 NOT SEEN YET</span></span>
+      </p>
+      <p class="sysline small" id="content-folder"></p>
+      <p class="ready">READY.<span class="cursor" aria-hidden="true"></span></p>
+      <div class="pushbar hidden" id="push-status">
+        <span class="text"></span>
+        <button class="key" id="cancel-push" type="button">CANCEL</button>
+      </div>
+    </header>
+
+    <nav class="tabs" role="tablist" aria-label="Sections">
+      <button role="tab" data-section="prg" aria-selected="true"><kbd>F1</kbd> PROGRAMS</button>
+      <button role="tab" data-section="img"><kbd>F3</kbd> PICTURES</button>
+      <button role="tab" data-section="sid"><kbd>F5</kbd> MUSIC</button>
+      <button role="tab" data-section="activity"><kbd>F7</kbd> ACTIVITY <span class="badge hidden" id="activity-badge"></span></button>
+    </nav>
+
+    <main>
+      <section id="browser">
+        <div class="toolbar">
+          <ol class="breadcrumb" id="breadcrumb"></ol>
+          <div class="actions">
+            <button type="button" class="key" id="new-folder">NEW FOLDER</button>
+            <label class="key primary">
+              UPLOAD FILES
+              <input type="file" id="upload" multiple hidden>
+            </label>
+          </div>
+        </div>
+
+        <div class="dropzone" id="dropzone">
+          <table class="files">
+            <thead>
+              <tr>
+                <th class="col-kind">TYPE</th>
+                <th>NAME</th>
+                <th class="col-details">DETAILS</th>
+                <th class="col-size">SIZE</th>
+                <th class="col-actions"></th>
+              </tr>
+            </thead>
+            <tbody id="files"></tbody>
+          </table>
+          <p class="empty hidden" id="empty">EMPTY FOLDER. DROP FILES HERE TO UPLOAD THEM.</p>
+          <div class="drop-hint">DROP FILES TO UPLOAD</div>
+        </div>
+        <p class="hint" id="section-hint"></p>
+      </section>
+
+      <section id="activity" class="hidden">
+        <ol class="activity" id="activity-list"></ol>
+        <p class="empty" id="activity-empty">NOTHING YET. START THE BROWSER ON THE C64.</p>
+      </section>
+    </main>
+  </div>
+
+  <aside class="preview hidden" id="preview" aria-label="Preview">
+    <div class="preview-header">
+      <h2 id="preview-title"></h2>
+      <button type="button" class="key" id="preview-close" aria-label="Close preview">CLOSE</button>
+    </div>
+    <div id="preview-body"></div>
+  </aside>
+
+  <dialog id="name-dialog">
+    <form method="dialog">
+      <h2 id="name-dialog-title"></h2>
+      <input type="text" id="name-dialog-input" required autocomplete="off" spellcheck="false">
+      <div class="dialog-actions">
+        <button value="cancel" class="key" formnovalidate>CANCEL</button>
+        <button value="ok" class="key primary">OK</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="confirm-dialog">
+    <form method="dialog">
+      <h2 id="confirm-dialog-title"></h2>
+      <p id="confirm-dialog-text"></p>
+      <div class="dialog-actions">
+        <button value="cancel" class="key">CANCEL</button>
+        <button value="ok" class="key danger">DELETE</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+
+  <script src="ui/app.js"></script>
+</body>
+</html>
