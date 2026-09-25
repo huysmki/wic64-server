@@ -2,6 +2,7 @@
 build/
 server/bin/
 server/obj/
+dist/
 
 # IDE and OS files
 .idea/

@@ -43,6 +43,7 @@ screen data, drawn with the C64's character set, colors and border.
 - [Screenshots](#screenshots)
 - [What it can do](#what-it-can-do)
 - [Requirements](#requirements)
+- [Download](#download)
 - [Getting started](#getting-started)
 - [Windows and Linux](#windows-and-linux)
 - [Using the browser on the C64](#using-the-browser-on-the-c64)
@@ -97,7 +98,8 @@ Everything above has been tested on a real C64 with a WiC64, except where [Limit
 
 - **A C64 with a WiC64** running firmware 2.x (legacy firmware is detected and reported). WiC64 emulation in
   VICE 3.8+ should work too, but hasn't been tested.
-- **A computer** running Windows, macOS or Linux (x64 or ARM, also a Raspberry Pi) with:
+- **A computer** running Windows, macOS or Linux (x64 or ARM, also a Raspberry Pi). With the
+  [release download](#download) that is all; to build it yourself you also need:
   - [.NET 10 SDK](https://dotnet.microsoft.com/download)
   - [ACME](https://sourceforge.net/projects/acme-crossass/) cross assembler
   - `make` (to build the C64 programs; see [Windows and Linux](#windows-and-linux) for alternatives)
@@ -106,6 +108,28 @@ Everything above has been tested on a real C64 with a WiC64, except where [Limit
   for Windows, macOS and Linux), so it should run the same elsewhere, but that is untested so far.
 - **Optional:** a drive on device 8 (1541, SD2IEC, ...) for saving programs.
 - **Optional:** the High Voltage SID Collection's `Songlengths.md5` for correct song lengths.
+
+## Download
+
+Ready-to-run files are on the [latest release](https://github.com/huysmki/wic64-server/releases/latest), so you
+don't need .NET, ACME or `make`:
+
+- [`browser.prg`](https://github.com/huysmki/wic64-server/releases/latest/download/browser.prg) for the C64
+- the server for your computer:
+  [Windows](https://github.com/huysmki/wic64-server/releases/latest/download/wic64-server-win-x64.zip),
+  [macOS Apple silicon](https://github.com/huysmki/wic64-server/releases/latest/download/wic64-server-osx-arm64.zip),
+  [macOS Intel](https://github.com/huysmki/wic64-server/releases/latest/download/wic64-server-osx-x64.zip),
+  [Linux x64](https://github.com/huysmki/wic64-server/releases/latest/download/wic64-server-linux-x64.zip),
+  [Linux ARM64 / Raspberry Pi](https://github.com/huysmki/wic64-server/releases/latest/download/wic64-server-linux-arm64.zip)
+  (64-bit OS)
+
+Unzip the server and start `Wic64Server` (`Wic64Server.exe` on Windows) in that folder. Put your files in its
+`content` folder and continue with step 2 of [Getting started](#getting-started). `appsettings.json` next to the
+executable holds the [settings](#configuration); relative folders are relative to that folder. On macOS, the first
+time, right-click `Wic64Server` and choose **Open**, or run `xattr -dr com.apple.quarantine .` in the folder,
+because the program is not signed.
+
+To build everything yourself, read on. `make release` builds these release files into `dist/`.
 
 ## Getting started
 

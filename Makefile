@@ -5,6 +5,7 @@
 #   make push PRG=file.prg        run file.prg on the C64 (the browser menu must be on screen)
 #   make push PRG=file.prg SAVE=1 same, but save it to disk (device 8) first
 #   make vice                     start VICE (3.8 or later) with the WiC64 emulation and the browser
+#   make release                  build the release files (browser.prg, server zips per platform) into dist/
 #
 # The C64 program proposes the address it saved on disk (file "WIC64 SERVER" on
 # device 8) the last time. Without that file it proposes this built-in address:
@@ -32,7 +33,7 @@ VICEFLAGS ?= -userportdevice 23
 PRG       ?= content/prg/hello.prg
 SAVE      ?= 0
 
-.PHONY: all server push vice clean FORCE
+.PHONY: all server push vice release clean FORCE
 
 all: build/browser.prg build/standalone.bin build/loadhelper.bin content/prg/hello.prg content/prg/loadtest.prg
 
@@ -73,5 +74,28 @@ push:
 vice: build/browser.prg
 	$(VICE) $(VICEFLAGS) -autostart build/browser.prg
 
+# Release files in dist/: browser.prg and a ready-to-run server per platform (no .NET, ACME or make needed).
+# A published server finds build/ and content/ next to its executable.
+RIDS ?= win-x64 osx-arm64 osx-x64 linux-x64 linux-arm64
+
+release:
+	@test "$(SERVER_ADDRESS)" = mypc:6464 || (echo "The release browser.prg proposes the generic mypc:6464, don't set SERVER_HOST, BONJOUR, IP or PORT" && false)
+	rm -rf dist build/config.asm
+	$(MAKE) all
+	mkdir -p dist
+	cp build/browser.prg dist/
+	for rid in $(RIDS); do \
+	  out=dist/wic64-server-$$rid; \
+	  dotnet publish server -c Release -r $$rid --self-contained -p:PublishSingleFile=true \
+	    -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=none -o $$out || exit 1; \
+	  mkdir -p $$out/build $$out/content/prg $$out/content/img $$out/content/sid; \
+	  cp build/browser.prg build/standalone.bin build/loadhelper.bin $$out/build/; \
+	  cp content/prg/hello.prg $$out/content/prg/; \
+	  cp LICENSE $$out/; \
+	  (cd dist && zip -qr wic64-server-$$rid.zip wic64-server-$$rid) || exit 1; \
+	  rm -rf $$out; \
+	done
+	@ls -l dist
+
 clean:
-	rm -rf build server/bin server/obj
+	rm -rf build dist server/bin server/obj
