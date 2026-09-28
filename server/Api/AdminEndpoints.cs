@@ -33,7 +33,7 @@ public sealed class AdminEndpoints(
         string Details);
 
     public sealed record NameRequest(string Section, string Path, string Name);
-    public sealed record PushRequest(string? Section, string Path, int? Index, bool Save);
+    public sealed record PushRequest(string? Section, string Path, int? Index, bool Save, bool Run = true);
 
     static readonly string[] ProgramExtensions = [".prg"];
     static readonly string[] PictureExtensions = [".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".koa", ".kla"];
@@ -47,7 +47,7 @@ public sealed class AdminEndpoints(
             c64LastSeen = activity.LastSeen,
             c64Address = activity.LastAddress,
             serverAddresses = LocalAddresses().Select(ip => $"{ip}:{options.Port}").Append($"{BonjourName()}:{options.Port}").ToArray(),
-            pushed = pushQueue.Peek() is { } p ? new { name = p.Title, kind = p.What.ToString().ToLowerInvariant(), save = p.Save } : null,
+            pushed = pushQueue.Peek() is { } p ? new { name = p.Title, kind = p.What.ToString().ToLowerInvariant(), save = p.Save, run = p.Run } : null,
             contentFolder = catalog.Root,
             songLengths = songLengths.DatabaseFile,
         });
@@ -223,8 +223,9 @@ public sealed class AdminEndpoints(
                 return Results.NotFound(new { error = "program not found" });
             }
 
-            pushQueue.Push(new PushQueue.Pushed(PushQueue.Kind.Program, name, program, r.Save));
-            activity.Add("push", $"Pushed {Petscii.ToText(name)}{(r.Save ? " (save to disk)" : "")}, waiting for the C64");
+            pushQueue.Push(new PushQueue.Pushed(PushQueue.Kind.Program, name, program, r.Save || !r.Run, Run: r.Run));
+            var what = !r.Run ? " (save to disk only)" : r.Save ? " (save to disk, then run)" : "";
+            activity.Add("push", $"Pushed {Petscii.ToText(name)}{what}, waiting for the C64");
             return Results.Ok(new { name = Petscii.ToText(name) });
         });
 

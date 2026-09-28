@@ -6,6 +6,7 @@ using Wic64Server.Music;
 using Wic64Server.Pictures;
 using Wic64Server.Programs;
 using Wic64Server.Screens;
+using Wic64Server.Uploads;
 
 // WiC64 server: serves programs, pictures and SID tunes to the browser on the C64 (Api/C64Endpoints.cs)
 // and a web UI to manage them (wwwroot, Api/AdminEndpoints.cs).
@@ -29,15 +30,22 @@ builder.Services
     .AddSingleton<PictureService>()
     .AddSingleton<LoadService>()
     .AddSingleton<MenuScreen>()
+    .AddSingleton<DriveSession>()
     .AddSingleton<C64Endpoints>()
+    .AddSingleton<DriveEndpoints>()
     .AddSingleton<AdminEndpoints>();
 
 var app = builder.Build();
 
 app.UseAccessRules();
 app.UseDefaultFiles();
-app.UseStaticFiles();
+app.UseStaticFiles(new StaticFileOptions
+{
+    // The web UI changes with the server: always ask whether a file is still current (a cheap 304 when it is)
+    OnPrepareResponse = context => context.Context.Response.Headers.CacheControl = "no-cache",
+});
 app.Services.GetRequiredService<C64Endpoints>().Map(app);
+app.Services.GetRequiredService<DriveEndpoints>().Map(app);
 app.Services.GetRequiredService<AdminEndpoints>().Map(app);
 
 if (Directory.Exists(options.ContentFolder))

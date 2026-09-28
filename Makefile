@@ -4,6 +4,7 @@
 #   make server                   run the .NET server on port $(PORT)
 #   make push PRG=file.prg        run file.prg on the C64 (the browser menu must be on screen)
 #   make push PRG=file.prg SAVE=1 same, but save it to disk (device 8) first
+#   make push PRG=file.prg SAVE=1 RUN=0   only save it to disk, the browser stays
 #   make vice                     start VICE (3.8 or later) with the WiC64 emulation and the browser
 #   make release                  build the release files (browser.prg, server zips per platform) into dist/
 #
@@ -30,12 +31,15 @@ VICE      ?= x64sc
 # USERPORT_DEVICE_WIC64 in VICE's userport.h
 VICEFLAGS ?= -userportdevice 23
 
+PLUGINS    = $(patsubst c64/plugins/%.asm,build/plugins/%.prg,$(wildcard c64/plugins/*.asm))
+
 PRG       ?= content/prg/hello.prg
 SAVE      ?= 0
+RUN       ?= 1
 
 .PHONY: all server push vice release clean FORCE
 
-all: build/browser.prg build/standalone.bin build/loadhelper.bin content/prg/hello.prg content/prg/loadtest.prg
+all: build/browser.prg build/standalone.bin build/loadhelper.bin $(PLUGINS) content/prg/hello.prg content/prg/loadtest.prg
 
 build/browser.prg: c64/browser.asm c64/wic64-library/wic64.asm c64/wic64-library/wic64.h build/config.asm
 	$(ACME) $(ACMEFLAGS) -f cbm -l build/browser.sym -o $@ c64/browser.asm
@@ -50,6 +54,11 @@ build/standalone.bin: c64/standalone.asm
 build/loadhelper.bin: c64/loadhelper.asm
 	@mkdir -p build
 	$(ACME) $(ACMEFLAGS) -f plain -o $@ $<
+
+# Plugins: C64 programs the browser starts from the Programs menu (Plugins/); the server fills in its address
+build/plugins/%.prg: c64/plugins/%.asm c64/wic64-library/wic64.asm c64/wic64-library/wic64.h
+	@mkdir -p build/plugins
+	$(ACME) $(ACMEFLAGS) -f cbm -o $@ $<
 
 content/prg/%.prg: c64/samples/%.asm
 	$(ACME) -f cbm -o $@ $<
@@ -69,7 +78,7 @@ server: all
 push:
 	@test -f "$(PRG)" || (echo "No such file: $(PRG)" && false)
 	@curl -sS --fail-with-body --data-binary @"$(PRG)" -H "Content-Type: application/octet-stream" \
-		"http://localhost:$(PORT)/push?save=$(SAVE)&name=$(notdir $(PRG))"
+		"http://localhost:$(PORT)/push?save=$(SAVE)&run=$(RUN)&name=$(notdir $(PRG))"
 
 vice: build/browser.prg
 	$(VICE) $(VICEFLAGS) -autostart build/browser.prg
@@ -89,7 +98,8 @@ release:
 	  dotnet publish server -c Release -r $$rid --self-contained -p:PublishSingleFile=true \
 	    -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=none -o $$out || exit 1; \
 	  mkdir -p $$out/build $$out/content/prg $$out/content/img $$out/content/sid; \
-	  cp build/browser.prg build/standalone.bin build/loadhelper.bin $$out/build/; \
+	  cp build/*.prg build/*.bin $$out/build/; \
+	  if [ -d build/plugins ]; then cp -R build/plugins $$out/build/; fi; \
 	  cp content/prg/hello.prg $$out/content/prg/; \
 	  cp LICENSE $$out/; \
 	  (cd dist && zip -qr wic64-server-$$rid.zip wic64-server-$$rid) || exit 1; \

@@ -10,14 +10,15 @@ public sealed class PushQueue
 {
     public enum Kind { Program, Picture, Tune }
 
-    /// <summary>Program: Name (PETSCII) and Program bytes. Picture and tune: the file's Path.</summary>
-    public sealed record Pushed(Kind What, byte[] Name, byte[]? Program = null, bool Save = false, string? Path = null)
+    /// <summary>Program: Name (PETSCII), Program bytes, save to disk and/or run. Picture and tune: the file's Path.</summary>
+    public sealed record Pushed(Kind What, byte[] Name, byte[]? Program = null, bool Save = false, string? Path = null, bool Run = true)
     {
         public string Title => What == Kind.Program ? Petscii.ToText(Name) : System.IO.Path.GetFileName(Path!);
 
-        /// <summary>The C64's check: 1 = run, 2 = save and run, 3 = show picture, 4 = play tune.</summary>
+        /// <summary>The C64's check: 1 = run, 2 = save and run, 3 = show picture, 4 = play tune, 5 = save only.</summary>
         public byte State => What switch
         {
+            Kind.Program when !Run => 5,
             Kind.Program => (byte)(Save ? 2 : 1),
             Kind.Picture => 3,
             _ => 4,

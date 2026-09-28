@@ -4,7 +4,7 @@
 const $ = (selector) => document.querySelector(selector);
 
 const sections = {
-  prg: { title: 'PROGRAMS', hint: 'Programs (.prg) and disk images (.d64). Click a .d64 to open it. RUN pushes the program: the browser on the C64 picks it up within a second while its menu is on screen. SAVE+RUN saves it to drive 8 first.' },
+  prg: { title: 'PROGRAMS', hint: 'Programs (.prg) and disk images (.d64). Click a .d64 to open it. RUN pushes the program: the browser on the C64 picks it up within a second while its menu is on screen. SAVE+RUN saves it to drive 8 first; SAVE only saves it and the browser stays.' },
   img: { title: 'PICTURES', hint: 'PNG, JPG, GIF, BMP, WebP and Koala (.koa) pictures. VIEW shows exactly what the C64 will display; SHOW ON C64 puts it on the C64\'s screen (any key on the C64 returns to the menu).' },
   sid: { title: 'MUSIC', hint: 'SID tunes. PLAY ON C64 starts the tune on the C64. Put the High Voltage SID Collection\'s Songlengths.md5 anywhere in this folder for correct song lengths.' },
 };
@@ -153,7 +153,8 @@ function renderRow(item, insideDisk) {
   if (item.kind === 'program') {
     actions.append(
       element('button', { type: 'button', class: 'key small primary', title: 'Run on the C64', onclick: () => push(item, false) }, 'RUN'),
-      element('button', { type: 'button', class: 'key small', title: 'Save to disk (drive 8) on the C64, then run it', onclick: () => push(item, true) }, 'SAVE+RUN'));
+      element('button', { type: 'button', class: 'key small', title: 'Save to disk (drive 8) on the C64, then run it', onclick: () => push(item, true) }, 'SAVE+RUN'),
+      element('button', { type: 'button', class: 'key small', title: 'Only save it to disk (drive 8) on the C64; the browser stays', onclick: () => push(item, true, false) }, 'SAVE'));
   }
   if (item.kind === 'picture' || item.kind === 'tune') {
     actions.append(
@@ -187,10 +188,11 @@ function renderRow(item, insideDisk) {
 // ---------------------------------------------------------------------------
 // Actions
 
-async function push(item, save) {
+async function push(item, save, run = true) {
+  const what = !run ? ' (save to disk only)' : save ? ' (save to disk, then run)' : '';
   await attempt(
-    () => postJson('/api/push', { path: item.path, index: item.index ?? null, save }),
-    (result) => `${result.name} is waiting for the C64${save ? ' (save to disk, then run)' : ''}`);
+    () => postJson('/api/push', { path: item.path, index: item.index ?? null, save, run }),
+    (result) => `${result.name} is waiting for the C64${what}`);
   refreshStatus();
 }
 
@@ -359,7 +361,8 @@ async function refreshStatus() {
   const pushStatus = $('#push-status');
   pushStatus.classList.toggle('hidden', !status.pushed);
   if (status.pushed) {
-    const action = { program: status.pushed.save ? 'SAVE + RUN' : 'RUN', picture: 'SHOW', tune: 'PLAY' }[status.pushed.kind];
+    const program = !status.pushed.run ? 'SAVE' : status.pushed.save ? 'SAVE + RUN' : 'RUN';
+    const action = { program, picture: 'SHOW', tune: 'PLAY' }[status.pushed.kind];
     pushStatus.querySelector('.text').textContent =
       `WAITING FOR THE C64: ${action} ${status.pushed.name.toUpperCase()}`;
   }

@@ -20,9 +20,10 @@ namespace Wic64Server.Api;
 /// GET /i/{folder}/{page}/{entry}      10001 bytes Koala data: bitmap, screen RAM, color RAM, background
 /// GET /s/{folder}/{page}/{entry}      tune (see SidService.Response)
 /// GET /v/{folder}/{page}/{entry}      info screen of a tune: 1000 screen codes
-/// GET /x                              something pushed? 0 = no, 1 = run, 2 = save and run, 3 = picture, 4 = tune
+/// GET /x                              something pushed? 0 = no, 1 = run, 2 = save and run, 3 = picture, 4 = tune,
+///                                     5 = save only
 /// GET /x/p, /x/i, /x/s                the pushed program, picture or tune, like /p, /i and /s
-/// POST /push?name=..&amp;save=1       push a .prg from the command line (make push)
+/// POST /push?name=..&amp;save=1&amp;run=0  push a .prg from the command line (make push)
 /// GET /h                              LOAD helper code for $02a7 and $0334 (c64/loadhelper.asm)
 /// GET /l/{folder}/{name}              LOAD from the helper, name in hex: .prg file, or only status $01
 /// GET /o                              the WiC64 portal (fetched from x.wic64.net), like /p
@@ -67,6 +68,16 @@ public sealed class C64Endpoints(
         app.MapGet("/h/{folder}", LegacyLoadHelper);
         app.MapGet("/l/{folder}/{name}", LoadFile);
     }
+
+    /// <summary>
+    /// The address the C64 reached the server on, for programs that call back. From the Host header, but with the
+    /// port added when it is missing: after the WiC64 talked to another host (e.g. the portal on x.wic64.net), its
+    /// HTTP client (ESP-IDF) sends the Host header without the port until the WiC64 is switched off.
+    /// </summary>
+    static string ServerAddress(HttpRequest request) =>
+        request.Host.Port is null && request.HttpContext.Connection.LocalPort is > 0 and var port and not 80
+            ? $"{request.Host.Host}:{port}"
+            : request.Host.Value ?? "";
 
     IResult Browser()
     {
@@ -132,12 +143,17 @@ public sealed class C64Endpoints(
         }
     }
 
-    IResult Program(string folder, string page, string index)
+    IResult Program(HttpRequest request, string folder, string page, string index)
     {
         try
         {
             switch (Lookup(Section.Programs, folder, page, index))
             {
+                case FileEntry file when Path.GetDirectoryName(file.Path) == catalog.PluginFolder:
+                    log.LogInformation("Plugin {File}", file.Name);
+                    activity.Add("program", $"Starting the plugin {Path.GetFileNameWithoutExtension(file.Name)}");
+                    return C64Response.Program(Petscii.FileName(file.Name),
+                        Plugins.WithServerAddress(File.ReadAllBytes(file.Path), ServerAddress(request)));
                 case FileEntry file:
                     log.LogInformation("Program {File}", file.Name);
                     activity.Add("program", $"Loading {file.Name}");
@@ -229,7 +245,7 @@ public sealed class C64Endpoints(
     // -------------------------------------------------------------------------------------------
     // Pushing from the computer (make push and the web UI)
 
-    async Task<IResult> PushFromCommandLine(HttpRequest request, string? name, string? save)
+    async Task<IResult> PushFromCommandLine(HttpRequest request, string? name, string? save, string? run)
     {
         using var body = new MemoryStream();
         await request.Body.CopyToAsync(body);
@@ -238,12 +254,21 @@ public sealed class C64Endpoints(
             return Results.BadRequest($"a .prg of 3 to {MaxProgramSize} bytes is expected, got {program.Length}\n");
 
         var saveToDisk = save is "1" or "true" or "yes";
+        var start = run is not ("0" or "false" or "no");
+        if (!saveToDisk && !start)
+            return Results.BadRequest("nothing to do: save=0 and run=0\n");
+
         var petsciiName = Petscii.FileName(name ?? "pushed");
-        pushQueue.Push(new PushQueue.Pushed(PushQueue.Kind.Program, petsciiName, program, saveToDisk));
-        activity.Add("push", $"Pushed {Petscii.ToText(petsciiName)} from the command line{(saveToDisk ? " (save to disk)" : "")}");
-        log.LogInformation("Pushed {Name} ({Bytes} bytes{Save}), waiting for the C64",
-            Petscii.ToText(petsciiName), program.Length, saveToDisk ? ", save to disk" : "");
-        return Results.Text($"Pushed {Petscii.ToText(petsciiName)}{(saveToDisk ? " (save to disk)" : "")}. " +
+        pushQueue.Push(new PushQueue.Pushed(PushQueue.Kind.Program, petsciiName, program, saveToDisk, Run: start));
+        var what = (saveToDisk, start) switch
+        {
+            (true, true) => "save to disk, then run",
+            (true, false) => "save to disk only",
+            _ => "run",
+        };
+        activity.Add("push", $"Pushed {Petscii.ToText(petsciiName)} from the command line ({what})");
+        log.LogInformation("Pushed {Name} ({Bytes} bytes, {What}), waiting for the C64", Petscii.ToText(petsciiName), program.Length, what);
+        return Results.Text($"Pushed {Petscii.ToText(petsciiName)} ({what}). " +
                             "The C64 picks it up within a second while the browser menu is on screen.\n");
     }
 
@@ -255,7 +280,7 @@ public sealed class C64Endpoints(
             return Error("nothing pushed");
 
         log.LogInformation("C64 picked up {Name}", Petscii.ToText(pushed.Name));
-        activity.Add("push", $"C64 picked up {Petscii.ToText(pushed.Name)}{(pushed.Save ? " and saves it to disk" : "")}");
+        activity.Add("push", $"C64 picked up {Petscii.ToText(pushed.Name)}{(pushed.Save ? " and saves it to disk" : "")}{(pushed.Run ? "" : " (not started)")}");
         return C64Response.Program(pushed.Name, pushed.Program!); // programs always carry their bytes
     }
 
@@ -304,7 +329,7 @@ public sealed class C64Endpoints(
 
     /// <summary>For browsers built before the browser wrote the helper's URL itself.</summary>
     IResult LegacyLoadHelper(HttpRequest request, string folder) =>
-        ParseHex(folder) is { } f ? Ok(loads.LegacyHelper(request.Host.Value ?? "", f)) : Error("bad helper request");
+        ParseHex(folder) is { } f ? Ok(loads.LegacyHelper(ServerAddress(request), f)) : Error("bad helper request");
 
     IResult LoadFile(string folder, string name)
     {

@@ -17,7 +17,7 @@ reads `.d64` disk images and even serves files to games while they run. The C64 
 ## Screenshots
 
 **On the C64:** the menu, a SID tune playing in the background, the tune's info screen, a photo converted to
-multicolor, and the startup screen. These are pixel-exact renderings of what the browser shows: the server's real
+multicolor, the startup screen, and the Disk tools plugin. These are pixel-exact renderings of what the browser shows: the server's real
 screen data, drawn with the C64's character set, colors and border.
 
 | Programs menu | Music with the time display |
@@ -25,8 +25,8 @@ screen data, drawn with the C64's character set, colors and border.
 | ![Programs menu on the C64](docs/images/c64-programs.png) | ![Music menu with a tune playing](docs/images/c64-music.png) |
 | **Info screen of a tune** (RETURN) | **A picture, converted by the server** |
 | ![Info screen of a SID tune](docs/images/c64-sid-info.png) | ![A picture on the C64](docs/images/c64-picture.png) |
-| **Startup screen** (address remembered on disk) | |
-| ![Startup screen](docs/images/c64-startup.png) | |
+| **Startup screen** (address remembered on disk) | **Disk tools:** a folder on an SD2IEC |
+| ![Startup screen](docs/images/c64-startup.png) | ![Disk tools showing an SD2IEC folder](docs/images/c64-disktools-sd2iec.png) |
 
 **The web UI** at `http://localhost:6464/`:
 
@@ -50,6 +50,7 @@ screen data, drawn with the C64's character set, colors and border.
 - [The web UI](#the-web-ui)
 - [Pushing programs from the computer](#pushing-programs-from-the-computer)
 - [Programs, disk images and the LOAD helper](#programs-disk-images-and-the-load-helper)
+- [Plugins and the Disk tools](#plugins-and-the-disk-tools)
 - [Music](#music)
 - [Pictures](#pictures)
 - [Configuration](#configuration)
@@ -70,6 +71,8 @@ screen data, drawn with the C64's character set, colors and border.
 - **Multi-file programs:** a LOAD helper lets running programs `LOAD` more files from the server, including from
   the B side of a game, with the real drive as fallback.
 - **Save to disk:** SHIFT+letter saves any program (also from inside a `.d64`) to drive 8, e.g. an SD2IEC.
+- **From the C64's disk to the computer:** the Disk tools plugin uploads files from drive 8–11, or backs up a whole
+  disk as a `.d64`. On an SD2IEC it also browses folders and disk images and uploads the image files themselves.
 - **Pictures:** PNG, JPG, GIF, BMP and WebP photos are converted to C64 multicolor with per-cell palettes and dithering.
   Koala (`.koa`) pictures are shown as they are.
 - **SID music:**
@@ -180,6 +183,7 @@ Then assemble and start everything by hand from the project folder:
 acme -v1 -I c64 -I c64/wic64-library -I build -f cbm -o build/browser.prg c64/browser.asm
 acme -v1 -f plain -o build/standalone.bin c64/standalone.asm
 acme -v1 -f plain -o build/loadhelper.bin c64/loadhelper.asm
+acme -v1 -I c64/wic64-library -f cbm -o build/plugins/disk-tools.prg c64/plugins/disk-tools.asm
 dotnet run --project server -- --Content=content --Build=build
 ```
 
@@ -202,6 +206,8 @@ three numbers). Edit with DEL and the keys `0-9 . : -` and letters, then RETURN 
 on device 8, if you changed it or it wasn't saved yet. The next start proposes it again ("Last used address,
 loaded from disk"). Without that file, or without a drive, it proposes the built-in address, `mypc:6464` by
 default. The address is not stored in the WiC64 itself. Typed it wrong? Press **F2** in the menu to get back to this screen.
+When the browser is loaded again by a plugin (← in the Disk tools), it gets the address from the plugin and skips this
+screen.
 
 Instead of an IP address you can use a name:
 
@@ -238,8 +244,10 @@ SHIFT+letter downloads the program and saves it to device 8 with its original lo
 shows the drive's own reply, for example:
 
 - `00, ok,00,00`: saved.
-- `63,file exists,00,00`: the name is taken. Nothing is overwritten; delete the old file with
-  `OPEN15,8,15,"S:NAME":CLOSE15`.
+- "File exists - replace it? Y/N": a file with that name is already on the disk. **Y** deletes the old file
+  (`S:NAME`) and saves the new one; **N** keeps the old file ("Not saved"; a pushed SAVE+RUN program still runs).
+  The browser deletes and saves instead of using the drive's "save with replace" (`@0:`), which some 1541s
+  handle badly.
 - "Save failed - no drive 8?": no drive answered on device 8.
 
 ## The web UI
@@ -253,7 +261,8 @@ It uses the "Press Start 2P" and "VT323" fonts from Google Fonts (without intern
   - browse folders and open `.d64` images; the list shows load addresses and block counts
   - upload with the button or by dragging files onto the list
   - create folders, rename, delete (with confirmation), download
-- **RUN / SAVE+RUN:** pushes a program, also from inside a `.d64`, to the browser on the C64.
+- **RUN / SAVE+RUN / SAVE:** pushes a program, also from inside a `.d64`, to the browser on the C64: run it, save it
+  to drive 8 and run it, or only save it (the browser stays).
 - **SHOW ON C64 / PLAY ON C64:** shows a picture on the C64's screen (any key returns to the menu) or plays a tune,
   from the list or the preview panel. A pushed tune gets the same time display, info screen and auto-next as one
   picked on the C64.
@@ -279,6 +288,7 @@ against the content folder.
 make push                                # sends content/prg/hello.prg
 make push PRG=path/to/program.prg        # the C64 loads and runs it within a second
 make push PRG=path/to/program.prg SAVE=1 # ... after saving it to device 8
+make push PRG=path/to/program.prg SAVE=1 RUN=0   # only save it to device 8; the browser stays
 ```
 
 Or use **RUN** in the web UI (and **SHOW ON C64** / **PLAY ON C64** for pictures and tunes). While its menu is on screen, the browser asks the server once a second whether
@@ -291,7 +301,8 @@ A typical development loop for your own C64 program:
 acme -f cbm -o build/mygame.prg mygame.asm && make push PRG=build/mygame.prg
 ```
 
-To update the browser itself: `make && make push PRG=build/browser.prg SAVE=1`.
+To update the browser itself: `make && make push PRG=build/browser.prg SAVE=1`, then press **Y** on the C64 to
+replace the old `BROWSER` on the disk.
 
 ## Programs, disk images and the LOAD helper
 
@@ -341,6 +352,54 @@ What works for these games:
   loads fine through the browser.
 
 The server's activity log shows every LOAD, which makes it easy to see where a game takes over with its own loader.
+
+## Plugins and the Disk tools
+
+**Plugins** are C64 programs that the browser starts from a `Plugins/` folder at the top of the Programs menu. They
+have the whole C64 to themselves, so the browser itself doesn't need to grow. When the server sends a plugin, it fills
+in its own address, so the plugin can talk to the server and load the browser again. It takes the address the C64
+reached it on, and adds the port when the WiC64 leaves it out: after the WiC64 talked to another server (e.g. the
+WiC64 portal), it sends the `Host` header without the port until it is switched off. Plugins are built by `make` from
+`c64/plugins/*.asm` into `build/plugins/`, and `make release` includes them.
+
+**Disk tools** (`c64/plugins/disk-tools.asm`) copies things from the C64's drive (8 to 11) to the computer:
+
+| A folder on an SD2IEC: open it or a disk image, or upload | Inside a disk image: F3 asks for the backup's name |
+|:---:|:---:|
+| ![Disk tools showing an SD2IEC folder](docs/images/c64-disktools-sd2iec.png) | ![The backup name prompt](docs/images/c64-disktools-name.png) |
+| **The backup, one track at a time** | **Done: the .d64 is on the computer** |
+| ![A disk backup in progress](docs/images/c64-disktools-backup.png) | ![The backup saved](docs/images/c64-disktools-done.png) |
+
+| Key | Action |
+|-----|--------|
+| A–T | Upload the file (PRG, SEQ or USR); on an SD2IEC open a folder (`DIR`) or disk image (`.d64`, `.d71`, `.d81`, `.m2i`) |
+| SHIFT+A–T | SD2IEC: upload the disk image file itself instead of opening it |
+| INST/DEL | SD2IEC: one folder up, or out of a disk image (`CD:←`) |
+| F3 | Back up the whole disk as a `.d64` (35 tracks, 683 sectors); first asks for its name |
+| F1 | Read the directory again, e.g. after changing the disk |
+| F5 | Next drive: 8, 9, 10, 11, then 8 again |
+| + / - | Next / previous page |
+| RUN/STOP | Stop an upload or backup |
+| ← | Back to the browser |
+
+- Uploads land in `content/prg/From C64/`, so they show up in the browser and the web UI right away. Existing files are
+  never overwritten: a second upload becomes `name (2).prg`. To store them elsewhere, set `UploadFolder` in
+  `server/appsettings.json` (relative to the project folder, or absolute, e.g. `"/Users/Kim/C64 backups"`); outside
+  `content/prg` they don't show up in the browser and the web UI.
+- On an SD2IEC, folders and disk images are opened with `CD:name`, so you can upload single files from inside a
+  `.d64`. The drive number shows in the title bar.
+- Files are read with the KERNAL and sent in parts of up to 32 KB, as WiC64 HTTP POSTs.
+- The backup first reads track 18 to check that there is a disk. An SD2IEC folder is no disk (its sectors can't be
+  read), so open a disk image with A–T first and back that up, or upload the image file itself with SHIFT+A–T.
+- The backup asks for the name of the `.d64`, proposing the disk's name: edit it with INST/DEL and type, RETURN
+  starts the backup, ← or RUN/STOP cancels.
+- The backup reads every sector with the drive's `U1` command and sends one track at a time. Unreadable sectors are
+  stored as zeros, and the message at the end tells how many there were. Because it copies sectors, not files, it also
+  saves games that keep their data outside files (games with a fast loader), unless the disk is copy-protected.
+- ← loads the browser again. The plugin leaves the server address in memory (`$9f00`), so the browser starts
+  without the address screen, also when the SD2IEC is in another folder than the one with the saved address.
+- **Speed:** a stock 1541 reads about 400 bytes per second over the serial bus, so a full disk takes roughly 7 minutes;
+  an SD2IEC is faster.
 
 ## Music
 
@@ -397,7 +456,8 @@ A 5120×2880 JPG converts in about a second. The C64 receives 10 KB of Koala dat
   "Build": "build",              // browser.prg, standalone.bin and loadhelper.bin from make
   "Port": 6464,
   "SidDefaultSeconds": 180,      // play length of tunes that are not in Songlengths.md5
-  "AllowRemoteAdmin": false      // allow the web UI from other computers
+  "AllowRemoteAdmin": false,     // allow the web UI from other computers
+  "UploadFolder": ""             // Disk tools uploads; empty: content/prg/From C64
 }
 ```
 
@@ -437,13 +497,19 @@ Most responses start with a status byte: `$00` = OK, followed by the payload; `$
 | `/i/{folder}/{page}/{entry}` | 8000 bitmap + 1000 screen RAM + 1000 color RAM + 1 background |
 | `/s/{folder}/{page}/{entry}` | 37-byte header (incl. the tune's own folder/page/entry), 40-char "now playing" line, standalone player (if needed), tune data |
 | `/v/{folder}/{page}/{entry}` | info screen of a tune (1000 screen codes) |
-| `/x` | is something pushed? 0 = no, 1 = run, 2 = save + run, 3 = show picture, 4 = play tune |
+| `/x` | is something pushed? 0 = no, 1 = run, 2 = save + run, 3 = show picture, 4 = play tune, 5 = save only |
 | `/x/p`, `/x/i`, `/x/s` | the pushed program, picture or tune, in the same format as `/p`, `/i` and `/s` |
 | `/h` | LOAD helper code for `$02a7` and `$0334` |
 | `/l/{folder}/{name in hex}` | a file for the LOAD helper, or only status `$01` (then the real drive is used) |
 | `/o` | the WiC64 portal, fetched from x.wic64.net (keeps the browser small) |
 | `/browser.prg` | the browser itself |
-| `POST /push?name=..&save=1` | queue a `.prg` for the C64 (used by `make push`) |
+| `POST /d/dir` | Disk tools: the directory of drive 8 (`LOAD"$",8`) -> the directory screen and file names |
+| `POST /d/dir/{device}` | the same for another drive (device number in hex, e.g. `09`) |
+| `/d/page/{page}` | Disk tools: another page of that directory |
+| `POST /d/file/{page}/{entry}/{part}/{last}` | Disk tools: part of an uploaded file |
+| `POST /d/track/{track}` | Disk tools: one track of a disk backup (sectors + one status code per sector) |
+| `POST /d/track/01/{name}` | the first track, with the name typed on the C64 (PETSCII in hex) |
+| `POST /push?name=..&save=1&run=0` | queue a `.prg` for the C64 (used by `make push`; `run=0`: save only) |
 | `/`, `/api/...` | web UI and its JSON API (only from the computer itself) |
 
 ### C64 memory map
@@ -458,6 +524,7 @@ Most responses start with a status byte: `$00` = OK, followed by the payload; `$
 | `$0800-$bfff` | Free for tunes playing in the background |
 | `$0800-$cfff` | Programs are received to their load address |
 | `$4400`, `$6000` | Picture screen RAM and bitmap (VIC bank 1) |
+| `$9f00-$9f22` | Server address left by a plugin for the browser (`SRV!`, 30 bytes, length); read once at startup |
 | `$c000-$cfff` | The browser, copied there from `$0801` at startup |
 | `$d000-$d4ff` | RAM under the I/O area: copy of the startup code (address screen), for F2 |
 
@@ -473,6 +540,7 @@ c64/
   browser.asm              the C64 browser (ACME)
   standalone.asm           SID player for tunes that need the browser's memory
   loadhelper.asm           LOAD from device 8 via the server, for multi-file programs
+  plugins/disk-tools.asm   plugin: upload files and whole disks from drive 8 to the computer
   samples/hello.asm        tiny BASIC program for testing pushes
   samples/loadtest.asm     BASIC program that LOADs "HELLO" through the LOAD helper
   wic64-library/           official WiC64 library (BSD license, see VERSION)
@@ -484,12 +552,14 @@ server/                    ASP.NET Core minimal API (.NET 10)
     C64Response.cs         status byte + payload / error line, program responses, URL parsing
     AdminEndpoints.cs      JSON API for the web UI
     AccessRules.cs         web UI only from this computer; tracks when the C64 was last seen
+    DriveEndpoints.cs      requests of the Disk tools plugin (WiC64 HTTP POST)
   Content/
     Catalog.cs             folders and .d64 images as menu entries, folder ids
     DiskImage.cs           .d64 reader
     Petscii.cs             PETSCII file names
   Programs/
     PushQueue.cs           what was pushed: a program, picture or tune
+    Plugins.cs             fills in the server address in plugins
     LoadService.cs         files and directory listings for the LOAD helper
   Pictures/
     KoalaConverter.cs      image -> multicolor bitmap (per-cell palette + dithering)
@@ -506,6 +576,8 @@ server/                    ASP.NET Core minimal API (.NET 10)
     MenuScreen.cs          the browser's menu screen
   Activity/
     ActivityLog.cs         recent C64 activity for the web UI
+  Uploads/
+    DriveSession.cs        the Disk tools plugin: drive 8's directory, uploaded files, disk backups
   wwwroot/                 the web UI (index.html, ui/app.js, ui/app.css)
 content/                   your files: prg/, img/, sid/
 build/                     generated by make (browser.prg, standalone.bin, loadhelper.bin, config.asm)

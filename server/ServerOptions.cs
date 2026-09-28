@@ -9,12 +9,14 @@ namespace Wic64Server;
 /// <param name="BuildFolder">Where make puts browser.prg, standalone.bin and loadhelper.bin.</param>
 /// <param name="SidDefaultLength">Song length for tunes that are not in Songlengths.md5.</param>
 /// <param name="AllowRemoteAdmin">Allow the web UI from other computers, not only from this computer.</param>
+/// <param name="UploadFolder">Where the Disk tools plugin stores files and disks from the C64's drive 8.</param>
 public sealed record ServerOptions(
     int Port,
     string ContentFolder,
     string BuildFolder,
     TimeSpan SidDefaultLength,
-    bool AllowRemoteAdmin)
+    bool AllowRemoteAdmin,
+    string UploadFolder)
 {
     public static ServerOptions From(IConfiguration configuration)
     {
@@ -22,12 +24,14 @@ public sealed record ServerOptions(
         string Folder(string key, string fallback) =>
             Path.GetFullPath(Path.Combine(projectFolder, configuration[key] is { Length: > 0 } value ? value : fallback));
 
+        var content = Folder("Content", "content");
         return new ServerOptions(
             configuration.GetValue("Port", 6464),
-            Folder("Content", "content"),
+            content,
             Folder("Build", "build"),
             TimeSpan.FromSeconds(configuration.GetValue("SidDefaultSeconds", 180)),
-            configuration.GetValue<bool>("AllowRemoteAdmin"));
+            configuration.GetValue<bool>("AllowRemoteAdmin"),
+            Folder("UploadFolder", Path.Combine(content, "prg", "From C64")));
     }
 
     /// <summary>

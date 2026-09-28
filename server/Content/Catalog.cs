@@ -36,6 +36,11 @@ public sealed class Catalog(ServerOptions options)
 
     public string FolderOf(Section section) => Path.Combine(Root, Sources[section].Folder);
 
+    /// <summary>C64 plugins (build/plugins), shown as the folder "Plugins/" at the top of the programs.</summary>
+    public string PluginFolder { get; } = Path.Combine(options.BuildFolder, "plugins");
+
+    bool HasPlugins => Directory.Exists(PluginFolder) && Directory.EnumerateFiles(PluginFolder, "*.prg").Any();
+
     public IReadOnlyList<Entry> List(Section section, int folderId)
     {
         var folder = Resolve(section, folderId);
@@ -60,6 +65,8 @@ public sealed class Catalog(ServerOptions options)
         var folderEntries = subfolders.Concat(diskImages)
             .OrderBy(f => f.Name, StringComparer.OrdinalIgnoreCase)
             .Select(f => (Entry)new FolderEntry(f.Name + "/", IdOf(section, f.Path, folderId, f.IsDiskImage)));
+        if (section == Section.Programs && folder.Path == FolderOf(section) && HasPlugins)
+            folderEntries = folderEntries.Prepend(new FolderEntry("Plugins/", IdOf(section, PluginFolder, 0, false)));
 
         var fileEntries = directory.EnumerateFiles()
             .Where(f => !f.Name.StartsWith('.') && Sources[section].Extensions.Contains(f.Extension.ToLowerInvariant()))
@@ -112,6 +119,8 @@ public sealed class Catalog(ServerOptions options)
     public string NameOf(Section section, int folderId)
     {
         var folder = Resolve(section, folderId);
+        if (folder.Path == PluginFolder)
+            return "Plugins";
         return Path.GetRelativePath(FolderOf(section), folder.Path) is "." ? "" : Path.GetRelativePath(FolderOf(section), folder.Path);
     }
 
