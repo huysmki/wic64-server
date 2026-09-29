@@ -99,7 +99,7 @@ release:
 	    -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=none -o $$out || exit 1; \
 	  mkdir -p $$out/build $$out/content/prg $$out/content/img $$out/content/sid; \
 	  cp build/*.prg build/*.bin $$out/build/; \
-	  if [ -d build/plugins ]; then cp -R build/plugins $$out/build/; fi; \
+	  cp -R build/plugins $$out/build/ || exit 1; \
 	  cp content/prg/hello.prg $$out/content/prg/; \
 	  cp LICENSE $$out/; \
 	  (cd dist && zip -qr wic64-server-$$rid.zip wic64-server-$$rid) || exit 1; \
