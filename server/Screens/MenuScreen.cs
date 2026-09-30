@@ -1,10 +1,11 @@
 using Wic64Server.Content;
 using Wic64Server.Music;
+using Wic64Server.Programs;
 
 namespace Wic64Server.Screens;
 
 /// <summary>Renders the browser's menu: the C64 copies these 1000 screen codes straight to $0400.</summary>
-public sealed class MenuScreen(Catalog catalog, SidService sids)
+public sealed class MenuScreen(Catalog catalog, SidService sids, LoadService loads)
 {
     public Screen Render(Section section, int folder, int page, int pages, IReadOnlyList<Entry> entries)
     {
@@ -41,6 +42,9 @@ public sealed class MenuScreen(Catalog catalog, SidService sids)
             _ => "A-T play  RET info  SPC next  STOP off",
         });
         screen.Print(23, 1, "F1/F3/F5 sections  F2 server  ← portal");
+        // Row 1 is free between the title and the entries; the browser clears the status line (row 24) itself
+        if (section == Section.Programs && loads.Warning(folder) is { } warning)
+            screen.Print(1, 1, warning);
         return screen;
     }
 
@@ -50,7 +54,7 @@ public sealed class MenuScreen(Catalog catalog, SidService sids)
         {
             case FolderEntry folder:
                 screen.Print(row, 3, folder.Name, 32);
-                screen.Print(row, 36, folder.Name.EndsWith(".d64/", StringComparison.OrdinalIgnoreCase) ? "d64" : "dir", 3);
+                screen.Print(row, 36, DiskImage.IsImage(folder.Name.TrimEnd('/')) ? Path.GetExtension(folder.Name.TrimEnd('/'))[1..].ToLowerInvariant() : "dir", 3);
                 break;
 
             case DiskEntry disk:

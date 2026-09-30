@@ -70,6 +70,8 @@ screen data, drawn with the C64's character set, colors and border.
   (most original commercial disks) don't work this way; see [Games with a fast loader](#games-with-a-fast-loader).
 - **Multi-file programs:** a LOAD helper lets running programs `LOAD` more files from the server, including from
   the B side of a game, with the real drive as fallback.
+- **SEQ files:** on disks with SEQ or USR files, a file helper lets programs read them with `OPEN`/`INPUT#`/`GET#`,
+  when the disk's programs leave room for it.
 - **Save to disk:** SHIFT+letter saves any program (also from inside a `.d64`) to drive 8, e.g. an SD2IEC.
 - **From the C64's disk to the computer:** the Disk tools plugin uploads files from drive 8–11, or backs up a whole
   disk as a `.d64`. On an SD2IEC it also browses folders and disk images and uploads the image files themselves.
@@ -142,7 +144,7 @@ make server     # build and start the server on port 6464 (keep this terminal op
 ```
 
 1. Put your files in the content folders:
-   - `content/prg`: programs (`.prg`) and disk images (`.d64`)
+   - `content/prg`: programs (`.prg`) and disk images (`.d64`, `.d71`, `.d81`)
    - `content/img`: pictures (`.png .jpg .jpeg .gif .bmp .webp .koa .kla`)
    - `content/sid`: SID tunes (`.sid`), optionally with `Songlengths.md5`
 
@@ -183,6 +185,10 @@ Then assemble and start everything by hand from the project folder:
 acme -v1 -I c64 -I c64/wic64-library -I build -f cbm -o build/browser.prg c64/browser.asm
 acme -v1 -f plain -o build/standalone.bin c64/standalone.asm
 acme -v1 -f plain -o build/loadhelper.bin c64/loadhelper.asm
+acme -v1 -f plain -o build/filehelper.bin c64/filehelper.asm
+acme -v1 -DORIGIN=0x1100 -f plain -o build/filehelper-1100.bin c64/filehelper.asm
+acme -v1 -f plain -o build/loadguard.bin c64/loadguard.asm
+acme -v1 -DORIGIN=0x1100 -f plain -o build/loadguard-1100.bin c64/loadguard.asm
 acme -v1 -I c64/wic64-library -f cbm -o build/plugins/disk-tools.prg c64/plugins/disk-tools.asm
 dotnet run --project server -- --Content=content --Build=build
 ```
@@ -312,7 +318,7 @@ replace the old `BROWSER` on the disk.
 - Programs that extend over the browser (`$c000-$cfff`) are received in two steps: everything below `$c000` first,
   then a tiny starter in the stack page receives the rest, resets the machine and starts the program.
 
-**Disk images.** `.d64` files (35 or 40 tracks) in `content/prg` open like folders and show their PRG files.
+**Disk images.** `.d64` (35 or 40 tracks), `.d71` and `.d81` files in `content/prg` open like folders and show their PRG files.
 Their programs run, save and push just like normal `.prg` files. The browser does not emulate a disk drive: it
 loads *files* from the image. Games that need the drive itself don't run (see below).
 
@@ -326,6 +332,32 @@ vector. Every `LOAD` from device 8 asks the server first:
 
 This works for programs that load through the KERNAL: most BASIC programs, many simpler games and many cracked
 versions. Try `loadtest` in the Programs menu: it is two lines of BASIC that `LOAD"HELLO",8` from the server.
+
+**When a disk overwrites the LOAD helper.** The helper lives in memory that is normally free (`$02a7-$02ff` and the
+tape buffer), but some programs use it themselves. When the programs on a disk image both write there and LOAD
+more files, the menu shows **"! Overwrites the LOAD helper: may hang"** above the list, and the activity log warns
+when you start one. The server finds this by scanning the programs' code, so it is a strong hint, not a certainty.
+Such disks need a real drive or an SD2IEC; CD64 is an example.
+
+**SEQ files and the file helper.** Programs read data files (SEQ, USR, also PRG) with `OPEN`, `INPUT#`/`GET#` and
+`CLOSE`, e.g. `OPEN 2,8,2,"SCORES,S,R"`. On a disk image (or folder with `.seq`/`.usr` files) that has such files,
+programs get a second helper (`c64/filehelper.asm`, 3 pages) that reads them from the server:
+
+- The server looks for 3 pages that none of the disk's programs load into or address: in `$c000-$cfff` if possible,
+  otherwise as high as possible below `$a000`, and then lowers the top of BASIC memory so BASIC stays below it.
+  When there is no room (the programs use all memory), there is no file helper and the activity log says so.
+- It only reads, one file at a time, from the same image or folder. `OPEN "$"` gives the directory. Writing, the
+  command channel (15), REL files and files the server doesn't have go to the real drive.
+- It hooks the KERNAL (`OPEN`, `CHKIN`, `CHRIN`, `GETIN`, `CLOSE`, `CLRCHN`, `CLALL`), so it works for programs
+  that read files through the KERNAL, like most BASIC programs and many tools, not for ones that talk to the drive
+  directly.
+
+**BASIC programs with INPUT and the LOAD guard.** The LOAD helper keeps its request (the URL up to the file name) in
+`$0200`, the BASIC input buffer, and BASIC's `INPUT` and `INPUT#` overwrite it. For BASIC programs that use `INPUT`
+or `INPUT#` and `LOAD` (on a disk image: any of its BASIC programs), the server also sends a LOAD guard
+(`c64/loadguard.asm`, 1 page), placed like the file helper. It keeps a copy of the request and puts it back before a
+LOAD when it was overwritten. A `LOAD` typed in direct mode after the program ends goes to the real drive: the typed
+line is in `$0200` itself.
 
 ### Games with a fast loader
 
@@ -453,7 +485,7 @@ A 5120×2880 JPG converts in about a second. The C64 receives 10 KB of Koala dat
 ```jsonc
 {
   "Content": "content",          // folder with prg/, img/ and sid/
-  "Build": "build",              // browser.prg, standalone.bin and loadhelper.bin from make
+  "Build": "build",              // browser.prg, standalone.bin, loadhelper.bin and filehelper.bin from make
   "Port": 6464,
   "SidDefaultSeconds": 180,      // play length of tunes that are not in Songlengths.md5
   "AllowRemoteAdmin": false,     // allow the web UI from other computers
@@ -480,7 +512,7 @@ The C64 has 64 KB and a 1 MHz CPU, so the server prepares everything in the exac
 | renders each menu as 1000 screen codes | copies them to `$0400` |
 | converts pictures to Koala data | copies them to the VIC's memory |
 | analyses SID tunes and sends load/init/play addresses, lengths and the mode | loads the tune and calls `init`/`play` |
-| builds the standalone player and the LOAD helper | stores them and jumps to them |
+| builds the standalone player and the LOAD helper, places the file helper | stores them and jumps to them |
 | reads `.d64` images and matches file names | receives a plain `.prg` |
 
 ### Protocol
@@ -500,7 +532,8 @@ Most responses start with a status byte: `$00` = OK, followed by the payload; `$
 | `/x` | is something pushed? 0 = no, 1 = run, 2 = save + run, 3 = show picture, 4 = play tune, 5 = save only |
 | `/x/p`, `/x/i`, `/x/s` | the pushed program, picture or tune, in the same format as `/p`, `/i` and `/s` |
 | `/h` | LOAD helper code for `$02a7` and `$0334` |
-| `/l/{folder}/{name in hex}` | a file for the LOAD helper, or only status `$01` (then the real drive is used) |
+| `/l/{folder}/{name in hex}` | a file for the LOAD helper, or only status `$01` (then the real drive is used); name `00`: the file helper, `01`: the LOAD guard, relocated, or only an RTS at `$03fc` |
+| `/f/{folder}/{chunk}/{name in hex}` | 64 bytes of a file the file helper OPENs, after a byte 1 for the last chunk (else 0); or only status `$01` |
 | `/o` | the WiC64 portal, fetched from x.wic64.net (keeps the browser small) |
 | `/browser.prg` | the browser itself |
 | `POST /d/dir` | Disk tools: the directory of drive 8 (`LOAD"$",8`) -> the directory screen and file names |
@@ -516,10 +549,11 @@ Most responses start with a status byte: `$00` = OK, followed by the payload; `$
 
 | Range | Use |
 |-------|-----|
-| `$0100-$0174` | Starter: receives the end of a program over the browser and starts it |
+| `$0100-$01ab` | Starter: receives the end of a program over the browser, fetches the file helper and LOAD guard, starts the program |
 | `$0200-$0258` | WiC64 request header and URL (BASIC input buffer); used by the LOAD helper too |
 | `$02a7-$02ff` | Message line and folder ids; part of the LOAD helper while a program runs |
 | `$0334-$03fb` | Standalone SID player or LOAD helper (both sent by the server) |
+| (free pages) | File helper (3 pages, disks with SEQ files) and LOAD guard (1 page, BASIC with INPUT and LOAD) while a program runs; placed by the server |
 | `$0400-$07e7` | Menu screen (row 24 = status line) |
 | `$0800-$bfff` | Free for tunes playing in the background |
 | `$0800-$cfff` | Programs are received to their load address |
@@ -540,6 +574,8 @@ c64/
   browser.asm              the C64 browser (ACME)
   standalone.asm           SID player for tunes that need the browser's memory
   loadhelper.asm           LOAD from device 8 via the server, for multi-file programs
+  filehelper.asm           OPEN and read SEQ files from device 8 via the server (relocatable)
+  loadguard.asm            keeps the LOAD helper's request safe from BASIC's INPUT (relocatable)
   plugins/disk-tools.asm   plugin: upload files and whole disks from drive 8 to the computer
   samples/hello.asm        tiny BASIC program for testing pushes
   samples/loadtest.asm     BASIC program that LOADs "HELLO" through the LOAD helper
@@ -548,19 +584,20 @@ server/                    ASP.NET Core minimal API (.NET 10)
   Program.cs               startup: settings, services, access rules, endpoints
   ServerOptions.cs         settings (port, content and build folders, song length, remote admin)
   Api/
-    C64Endpoints.cs        the C64 protocol (menus, programs, pictures, tunes, pushes, LOAD helper)
+    C64Endpoints.cs        the C64 protocol (menus, programs, pictures, tunes, pushes, LOAD and file helper)
     C64Response.cs         status byte + payload / error line, program responses, URL parsing
     AdminEndpoints.cs      JSON API for the web UI
     AccessRules.cs         web UI only from this computer; tracks when the C64 was last seen
     DriveEndpoints.cs      requests of the Disk tools plugin (WiC64 HTTP POST)
   Content/
     Catalog.cs             folders and .d64 images as menu entries, folder ids
-    DiskImage.cs           .d64 reader
+    DiskImage.cs           .d64/.d71/.d81 reader
     Petscii.cs             PETSCII file names
   Programs/
     PushQueue.cs           what was pushed: a program, picture or tune
     Plugins.cs             fills in the server address in plugins
-    LoadService.cs         files and directory listings for the LOAD helper
+    LoadService.cs         files and directory listings for the LOAD and file helper
+    MemoryScan.cs          which memory a disk's programs use; do they overwrite the LOAD helper?
   Pictures/
     KoalaConverter.cs      image -> multicolor bitmap (per-cell palette + dithering)
     PictureService.cs      picture cache and PNG previews
@@ -580,7 +617,8 @@ server/                    ASP.NET Core minimal API (.NET 10)
     DriveSession.cs        the Disk tools plugin: drive 8's directory, uploaded files, disk backups
   wwwroot/                 the web UI (index.html, ui/app.js, ui/app.css)
 content/                   your files: prg/, img/, sid/
-build/                     generated by make (browser.prg, standalone.bin, loadhelper.bin, config.asm)
+build/                     generated by make (browser.prg, standalone.bin, loadhelper.bin, filehelper*.bin, loadguard*.bin,
+                           config.asm)
 ```
 
 ## Troubleshooting
@@ -607,9 +645,10 @@ build/                     generated by make (browser.prg, standalone.bin, loadh
   point.
 - **No drive emulation:** games with their own fast loader (most original commercial disks) don't run from a `.d64`;
   only files loaded through the KERNAL are served. See [Games with a fast loader](#games-with-a-fast-loader).
-- **Disk formats:** SEQ/USR/REL files and other formats (`.d71`, `.d81`, `.t64`) are not supported yet.
+- **Disk formats:** REL files, writing files, `.d81` partitions and `.t64` are not supported yet. SEQ files can only
+  be read when the file helper fits (see [SEQ files](#programs-disk-images-and-the-load-helper)).
 - **LOAD helper memory:** the helper lives in `$0200-$0258`, `$02a7-$02ff` and `$0334-$03fb`. Programs that use that
-  memory overwrite it, and their LOADs then go to the real drive.
+  memory overwrite it, and their LOADs then go to the real drive or hang; the menu warns for such disk images.
 - **SID playback:**
   - SID files with 2 or 3 SID chips play only the first chip.
   - Tunes whose play routine needs a speed other than 50 Hz or the default CIA timer play at the wrong speed.
@@ -618,12 +657,12 @@ build/                     generated by make (browser.prg, standalone.bin, loadh
   loading parts from the server on demand.
 - **Tested on real hardware:** browsing, running (incl. `.d64` and Bubble Bobble 2), the LOAD helper, push, saving,
   background and standalone music. Not yet: programs larger than `$c000`, auto-next after the full song length,
-  the info screen, VICE.
+  the info screen, VICE, the file helper and LOAD guard (tested in an emulator with the real KERNAL only).
 
 ## Ideas for later
 
 - **Modular browser:** features loaded from the server on demand, so the C64 side can keep growing.
-- **Disk images:** `.t64`/`.d71`/`.d81`, SEQ files, and a writable virtual drive (SAVE to the computer).
+- **Disk images:** `.t64`, REL files, and a writable virtual drive (SAVE to the computer).
 - **Search:** type a few letters to find a tune in the full High Voltage SID Collection.
 - **Playlists:** jukebox and slideshow modes (pictures cycling while music plays).
 - **Computer dashboard:** clock, calendar, now playing on Spotify/Music, with remote control from the C64.

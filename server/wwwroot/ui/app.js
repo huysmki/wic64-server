@@ -4,7 +4,7 @@
 const $ = (selector) => document.querySelector(selector);
 
 const sections = {
-  prg: { title: 'PROGRAMS', hint: 'Programs (.prg) and disk images (.d64). Click a .d64 to open it. RUN pushes the program: the browser on the C64 picks it up within a second while its menu is on screen. SAVE+RUN saves it to drive 8 first; SAVE only saves it and the browser stays.' },
+  prg: { title: 'PROGRAMS', hint: 'Programs (.prg) and disk images (.d64, .d71, .d81). Click a disk image to open it. RUN pushes the program: the browser on the C64 picks it up within a second while its menu is on screen. SAVE+RUN saves it to drive 8 first; SAVE only saves it and the browser stays.' },
   img: { title: 'PICTURES', hint: 'PNG, JPG, GIF, BMP, WebP and Koala (.koa) pictures. VIEW shows exactly what the C64 will display; SHOW ON C64 puts it on the C64\'s screen (any key on the C64 returns to the menu).' },
   sid: { title: 'MUSIC', hint: 'SID tunes. PLAY ON C64 starts the tune on the C64. Put the High Voltage SID Collection\'s Songlengths.md5 anywhere in this folder for correct song lengths.' },
 };
@@ -117,6 +117,7 @@ function renderBreadcrumb(path) {
 // ---------------------------------------------------------------------------
 // File list
 
+const isDiskImage = (path) => /\.d(64|71|81)$/i.test(path);
 const kindLabels = { folder: 'DIR', disk: 'D64', program: 'PRG', picture: 'IMG', tune: 'SID', other: 'SEQ' };
 
 async function loadFiles() {
@@ -133,7 +134,7 @@ async function loadFiles() {
   if (section !== state.section || path !== state.path) return; // navigated away meanwhile
 
   renderBreadcrumb(data.path);
-  const insideDisk = data.path.toLowerCase().endsWith('.d64');
+  const insideDisk = isDiskImage(data.path);
   $('#new-folder').disabled = insideDisk;
   $('#upload').disabled = insideDisk;
   $('#upload').parentElement.classList.toggle('hidden', insideDisk);
@@ -178,7 +179,7 @@ function renderRow(item, insideDisk) {
   }
 
   return element('tr', {},
-    element('td', {}, element('span', { class: `kind ${item.kind}` }, kindLabels[item.kind] || '---')),
+    element('td', {}, element('span', { class: `kind ${item.kind}` }, item.kind === 'disk' ? item.name.slice(-3).toUpperCase() : kindLabels[item.kind] || '---')),
     element('td', { class: 'name' }, name),
     element('td', { class: 'details' }, item.details),
     element('td', { class: 'size' }, item.kind === 'folder' ? '' : formatSize(item.size)),
@@ -427,7 +428,7 @@ $('#cancel-push').addEventListener('click', async () => {
 const dropzone = $('#dropzone');
 let dragDepth = 0;
 dropzone.addEventListener('dragenter', (event) => {
-  if (!event.dataTransfer.types.includes('Files') || state.path.toLowerCase().endsWith('.d64')) return;
+  if (!event.dataTransfer.types.includes('Files') || isDiskImage(state.path)) return;
   event.preventDefault();
   dragDepth++;
   dropzone.classList.add('dragging');
@@ -443,7 +444,7 @@ dropzone.addEventListener('drop', (event) => {
   event.preventDefault();
   dragDepth = 0;
   dropzone.classList.remove('dragging');
-  if (!state.path.toLowerCase().endsWith('.d64')) uploadFiles(event.dataTransfer.files);
+  if (!isDiskImage(state.path)) uploadFiles(event.dataTransfer.files);
 });
 
 selectTab('prg');

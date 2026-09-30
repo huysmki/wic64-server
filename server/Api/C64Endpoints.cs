@@ -25,7 +25,11 @@ namespace Wic64Server.Api;
 /// GET /x/p, /x/i, /x/s                the pushed program, picture or tune, like /p, /i and /s
 /// POST /push?name=..&amp;save=1&amp;run=0  push a .prg from the command line (make push)
 /// GET /h                              LOAD helper code for $02a7 and $0334 (c64/loadhelper.asm)
-/// GET /l/{folder}/{name}              LOAD from the helper, name in hex: .prg file, or only status $01
+/// GET /l/{folder}/{name}              LOAD from the helper, name in hex: .prg file, or only status $01;
+///                                     name 00: the file helper (c64/filehelper.asm) for the starter,
+///                                     name 01: the LOAD guard (c64/loadguard.asm)
+/// GET /f/{folder}/{chunk}/{name}      OPEN from the file helper, name in hex: last chunk? (0/1) and up to 64 bytes
+///                                     of the file, or only status $01
 /// GET /o                              the WiC64 portal (fetched from x.wic64.net), like /p
 /// GET /browser.prg                    the C64 browser itself
 /// </code>
@@ -67,6 +71,7 @@ public sealed class C64Endpoints(
         app.MapGet("/h", LoadHelper);
         app.MapGet("/h/{folder}", LegacyLoadHelper);
         app.MapGet("/l/{folder}/{name}", LoadFile);
+        app.MapGet("/f/{folder}/{chunk}/{name}", ReadFile);
     }
 
     /// <summary>
@@ -155,13 +160,25 @@ public sealed class C64Endpoints(
                     return C64Response.Program(Petscii.FileName(file.Name),
                         Plugins.WithServerAddress(File.ReadAllBytes(file.Path), ServerAddress(request)));
                 case FileEntry file:
+                {
                     log.LogInformation("Program {File}", file.Name);
                     activity.Add("program", $"Loading {file.Name}");
-                    return C64Response.Program(Petscii.FileName(file.Name), File.ReadAllBytes(file.Path));
+                    var program = File.ReadAllBytes(file.Path);
+                    if (LoadService.OverwritesHelper(file.Name, program))
+                        activity.Add("error", $"{file.Name} overwrites the LOAD helper: loading more files may hang (use a real drive)");
+                    loads.Started(file.Name, program);
+                    return C64Response.Program(Petscii.FileName(file.Name), program);
+                }
                 case DiskEntry disk:
+                {
                     log.LogInformation("Program {File} from {Image}", disk.Name, Path.GetFileName(disk.ImagePath));
                     activity.Add("program", $"Loading {disk.Name} from {Path.GetFileName(disk.ImagePath)}");
-                    return C64Response.Program(disk.File.Name, DiskImage.Load(disk.ImagePath).Read(disk.File));
+                    if (loads.Warning(ParseHex(folder)!.Value) is not null)
+                        activity.Add("error", $"{Path.GetFileName(disk.ImagePath)} overwrites the LOAD helper: loading more files may hang (use a real drive)");
+                    var program = DiskImage.Load(disk.ImagePath).Read(disk.File);
+                    loads.Started(disk.Name, program);
+                    return C64Response.Program(disk.File.Name, program);
+                }
                 default:
                     return Error("program not found");
             }
@@ -280,6 +297,7 @@ public sealed class C64Endpoints(
             return Error("nothing pushed");
 
         log.LogInformation("C64 picked up {Name}", Petscii.ToText(pushed.Name));
+        loads.Started(Petscii.ToText(pushed.Name), pushed.Program!);
         activity.Add("push", $"C64 picked up {Petscii.ToText(pushed.Name)}{(pushed.Save ? " and saves it to disk" : "")}{(pushed.Run ? "" : " (not started)")}");
         return C64Response.Program(pushed.Name, pushed.Program!); // programs always carry their bytes
     }
@@ -341,6 +359,21 @@ public sealed class C64Endpoints(
         catch (Exception e)
         {
             log.LogWarning(e, "LOAD failed");
+            return NotFound();
+        }
+    }
+
+    IResult ReadFile(string folder, string chunk, string name)
+    {
+        try
+        {
+            return ParseHex(folder) is { } f && ParseHex(chunk) is { } c && loads.ReadChunk(f, c, Convert.FromHexString(name)) is var (data, last)
+                ? Ok([last ? (byte)1 : (byte)0], data)
+                : NotFound(); // the file helper then tries the real drive
+        }
+        catch (Exception e)
+        {
+            log.LogWarning(e, "OPEN failed");
             return NotFound();
         }
     }

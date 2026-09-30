@@ -20,10 +20,12 @@
 ; whether something was pushed (make push or the web UI) and runs it.
 ;
 ; Memory map
-;   $0100-$016f    starter: receives the end of a program over the browser, starts it
+;   $0100-$01ab    starter: receives the end of a program over the browser, starts it
 ;   $0200-$0258    request header and URL (BASIC input buffer, unused)
 ;   $02a7-$02f6    message line, folder ids of the menu entries (unused area)
 ;   $0334-$03ff    standalone SID player or LOAD helper (sent by the server)
+;   (anywhere)     file helper for SEQ files and LOAD guard, fetched by the starter (c64/filehelper.asm,
+;                  c64/loadguard.asm)
 ;   $0400-$07e7    menu screen (row 24 is the status line)
 ;   $0801-         BASIC stub that copies the code below to $c000
 ;   $0800-$cfff    programs are received to their load address, then saved and/or started
@@ -106,6 +108,11 @@ MODE_HELPER     = 4                     ; install the LOAD helper, so the progra
 
 load_helper     = $0334                 ; LOAD helper (c64/loadhelper.asm), sent by the server
 LOAD_VECTOR     = $0330
+END_ADDRESS     = $ae                   ; end of a LOAD + 1
+FILENAME_LENGTH = $b7                   ; SETNAM/SETLFS values of the KERNAL
+SECONDARY       = $b9
+DEVICE          = $ba
+FILENAME        = $bb
 
 ADDRESS_ROW     = 5
 ADDRESS_MAX     = 30                    ; max length of the "ip:port" server address
@@ -126,6 +133,11 @@ CHECK_BACKOFF   = 5                     ; seconds to wait after a failed check
 stub_end:
     !word 0
 
+    ; KERNAL vectors back to normal: a program started before may have left the file helper or LOAD guard
+    ; hooked in, somewhere this copy is about to overwrite
+    sei
+    jsr RESTOR
+    cli
     ldx #>(code_end - code_start + $ff) ; number of pages to copy
     ldy #0
 stub_source = * + 1
@@ -633,11 +645,11 @@ receive_program:
 
 ; Hands over to the starter in the stack page
 start_program:
-    ldx #starter_end - starter_image - 1
--   lda starter_image,x
-    sta starter,x
+    ldx #starter_end - starter_image    ; more than 128 bytes: count down to 0, not below
+-   lda starter_image-1,x
+    sta starter-1,x
     dex
-    bpl -
+    bne -
 
     lda program_mode
     and #MODE_HELPER
@@ -722,6 +734,37 @@ st_helper:
     sta LOAD_VECTOR
     lda #>load_helper
     sta LOAD_VECTOR+1
+
+    ; the file helper (file $00) and the LOAD guard (file $01): the LOAD helper loads them from the server,
+    ; which puts them where the program leaves room (or sends only an RTS to $03fc); their last 3 bytes
+    ; are their entry
+st_module:
+    lda #1
+    sta FILENAME_LENGTH
+    sta SECONDARY                       ; to the address the server chose
+    lda #<st_module_name
+    sta FILENAME
+    lda #>st_module_name
+    sta FILENAME+1
+    lda #8
+    sta DEVICE
+    lda #0
+    jsr load_helper
+    bcs st_next_module
+    lda END_ADDRESS
+    sec
+    sbc #3
+    sta st_install+1
+    lda END_ADDRESS+1
+    sbc #0
+    sta st_install+2
+st_install:
+    jsr $ffff
+st_next_module:
+    inc st_module_name
+    lda st_module_name
+    cmp #2
+    bne st_module
 +   cli
     lda st_load+1
     cmp #$08                            ; loaded at $08xx: RUN it, otherwise jump to it
@@ -732,8 +775,12 @@ st_helper:
 
 st_count:       !word 0
 st_load:        !word 0
+st_module_name: !byte 0                 ; "file name" of the file helper (0) and the LOAD guard (1)
 }
 starter_end:
+!if starter_end - starter_image > 256 {
+    !error "the starter does not fit in the copy loop"
+}
 
 ; Saves program_load-program_end to device 8 and shows the drive status. Carry set on error.
 ; When the file already exists, asks whether to replace it.

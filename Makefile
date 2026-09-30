@@ -39,7 +39,7 @@ RUN       ?= 1
 
 .PHONY: all server push vice release clean FORCE
 
-all: build/browser.prg build/standalone.bin build/loadhelper.bin $(PLUGINS) content/prg/hello.prg content/prg/loadtest.prg
+all: build/browser.prg build/standalone.bin build/loadhelper.bin build/filehelper.bin build/loadguard.bin $(PLUGINS) content/prg/hello.prg content/prg/loadtest.prg
 
 build/browser.prg: c64/browser.asm c64/wic64-library/wic64.asm c64/wic64-library/wic64.h build/config.asm
 	$(ACME) $(ACMEFLAGS) -f cbm -l build/browser.sym -o $@ c64/browser.asm
@@ -54,6 +54,18 @@ build/standalone.bin: c64/standalone.asm
 build/loadhelper.bin: c64/loadhelper.asm
 	@mkdir -p build
 	$(ACME) $(ACMEFLAGS) -f plain -o $@ $<
+
+# The server relocates this helper for SEQ files to free pages: it compares a build at $1000 with one at $1100
+build/filehelper.bin: c64/filehelper.asm
+	@mkdir -p build
+	$(ACME) $(ACMEFLAGS) -f plain -o $@ $<
+	$(ACME) $(ACMEFLAGS) -DORIGIN=0x1100 -f plain -o build/filehelper-1100.bin $<
+
+# The same for the LOAD guard (BASIC programs that INPUT and LOAD)
+build/loadguard.bin: c64/loadguard.asm
+	@mkdir -p build
+	$(ACME) $(ACMEFLAGS) -f plain -o $@ $<
+	$(ACME) $(ACMEFLAGS) -DORIGIN=0x1100 -f plain -o build/loadguard-1100.bin $<
 
 # Plugins: C64 programs the browser starts from the Programs menu (Plugins/); the server fills in its address
 build/plugins/%.prg: c64/plugins/%.asm c64/wic64-library/wic64.asm c64/wic64-library/wic64.h

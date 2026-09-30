@@ -27,7 +27,7 @@ public sealed class AdminEndpoints(
         string Name,
         string Kind,        // folder, disk, program, picture, tune, other
         string Path,        // relative to the section folder
-        int? Index,         // program inside a .d64
+        int? Index,         // program inside a disk image
         long Size,
         DateTime? Modified,
         string Details);
@@ -60,7 +60,7 @@ public sealed class AdminEndpoints(
             var full = Resolve(root, path);
             var relative = Relative(root, full);
 
-            if (File.Exists(full) && full.EndsWith(".d64", StringComparison.OrdinalIgnoreCase))
+            if (File.Exists(full) && DiskImage.IsImage(full))
                 return Results.Ok(new { path = relative, items = DiskItems(full, relative) });
             if (!Directory.Exists(full))
             {
@@ -204,7 +204,7 @@ public sealed class AdminEndpoints(
 
             var full = Resolve(SectionRoot(catalog, "prg"), r.Path);
             byte[] name, program;
-            if (r.Index is { } index && full.EndsWith(".d64", StringComparison.OrdinalIgnoreCase))
+            if (r.Index is { } index && DiskImage.IsImage(full))
             {
                 var image = DiskImage.Load(full);
                 var files = image.Programs();
@@ -270,7 +270,7 @@ public sealed class AdminEndpoints(
         {
             switch (section)
             {
-                case "prg" when ext == ".d64":
+                case "prg" when DiskImage.Extensions.Contains(ext):
                     var programs = DiskImage.Load(f.FullName).Programs();
                     return new FileItem(f.Name, "disk", relative, null, f.Length, f.LastWriteTimeUtc,
                         $"disk image, {programs.Count} program{(programs.Count == 1 ? "" : "s")}");

@@ -4,7 +4,7 @@ public enum Section { Programs, Pictures, Music }
 
 public abstract record Entry(string Name);
 
-/// <summary>A subfolder, or a .d64 disk image that can be opened like a folder.</summary>
+/// <summary>A subfolder, or a disk image (.d64, .d71, .d81) that can be opened like a folder.</summary>
 public sealed record FolderEntry(string Name, int Id) : Entry(Name);
 
 public sealed record FileEntry(string Name, string Path) : Entry(Name);
@@ -59,7 +59,7 @@ public sealed class Catalog(ServerOptions options)
             .Where(d => !d.Name.StartsWith('.'))
             .Select(d => (d.Name, Path: d.FullName, IsDiskImage: false));
         var diskImages = section == Section.Programs
-            ? directory.EnumerateFiles("*.d64").Select(f => (f.Name, Path: f.FullName, IsDiskImage: true))
+            ? DiskImage.In(directory.FullName).Select(f => (Name: Path.GetFileName(f), Path: f, IsDiskImage: true))
             : [];
 
         var folderEntries = subfolders.Concat(diskImages)
@@ -108,7 +108,7 @@ public sealed class Catalog(ServerOptions options)
         return null;
     }
 
-    /// <summary>The directory or .d64 image behind a folder id.</summary>
+    /// <summary>The directory or disk image behind a folder id.</summary>
     public (string Path, bool IsDiskImage) PathOf(Section section, int folderId)
     {
         var folder = Resolve(section, folderId);
