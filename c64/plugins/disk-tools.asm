@@ -2,12 +2,15 @@
 ; Disk tools: a plugin of the WiC64 browser
 ;
 ; Uploads files and whole disks from drive 8-11 to the server, which stores them
-; in content/prg/From C64 (files as they are, disks as .d64).
+; in content/prg/From C64 (files as they are, disks as .d64), and writes .d64
+; images from the computer to a real disk.
 ;
 ;   A-T        upload the file; open a folder or disk image (SD2IEC)
 ;   SHIFT+A-T  upload a disk image file itself (SD2IEC)
 ;   INST/DEL   one folder up, or out of a disk image (SD2IEC)
 ;   F3         back up the whole disk as a .d64 (asks for its name; RUN/STOP stops it)
+;   F7         write a .d64 from the computer to the disk (Y: write, F: format first;
+;              F5 there chooses the drive)
 ;   F1         read the directory again (e.g. after changing the disk)
 ;   F5         next drive: 8, 9, 10, 11
 ;   + / -      next / previous page
@@ -47,6 +50,7 @@ STATUS          = $90
 KEY_F1          = $85
 KEY_F3          = $86
 KEY_F5          = $87
+KEY_F7          = $88
 KEY_DEL         = $14
 KEY_SHIFT_A     = $c1
 KEY_LEFT_ARROW  = $5f
@@ -125,6 +129,9 @@ main_loop:
 +   cmp #KEY_F3
     bne +
     jmp backup_disk
++   cmp #KEY_F7
+    bne +
+    jmp image_list
 +   cmp #KEY_LEFT_ARROW
     bne +
     jmp back_to_browser
@@ -181,6 +188,10 @@ next_drive:
 ;------------------------------------------------------------------------------
 
 read_directory:
+    lda #<main_loop
+    sta resume
+    lda #>main_loop
+    sta resume+1
     jsr clear_screen
     jsr draw_title
     +status msg_reading_directory
@@ -461,25 +472,11 @@ directory_command:
 ;------------------------------------------------------------------------------
 
 backup_disk:
-    lda #0
-    jsr SETNAM
-    lda #COMMAND_CHANNEL
-    ldx device
-    ldy #COMMAND_CHANNEL
-    jsr SETLFS
-    jsr OPEN
+    jsr open_channels
     bcc +
     +status msg_no_drive
     jmp main_loop
-+   lda #1
-    ldx #<hash
-    ldy #>hash
-    jsr SETNAM
-    lda #FILE_CHANNEL
-    ldx device
-    ldy #FILE_CHANNEL
-    jsr SETLFS
-    jsr OPEN
++
 
     ; first a test read of track 18 sector 0 (the disk's name and BAM): an SD2IEC folder is no disk,
     ; nor is an empty 1541
@@ -566,6 +563,27 @@ close_backup:
     jsr close_channels
     jmp main_loop
 
+; Opens the command channel and channel 2 with a drive buffer ("#"). Carry set when there is no drive.
+open_channels:
+    lda #0
+    jsr SETNAM
+    lda #COMMAND_CHANNEL
+    ldx device
+    ldy #COMMAND_CHANNEL
+    jsr SETLFS
+    jsr OPEN
+    bcs +
+    lda #1
+    ldx #<hash
+    ldy #>hash
+    jsr SETNAM
+    lda #FILE_CHANNEL
+    ldx device
+    ldy #FILE_CHANNEL
+    jsr SETLFS
+    jmp OPEN
++   rts
+
 close_channels:
     jsr CLRCHN
     lda #FILE_CHANNEL
@@ -580,51 +598,8 @@ backup_stopped:
 ; "U1 2 0 track sector" reads the sector into the drive buffer of channel 2, then its 256 bytes go to ptr
 ; (ptr moves on a page). Returns the drive's status code in A: 0 = fine, e.g. 21 = read error.
 read_sector:
-    ldx #COMMAND_CHANNEL
-    jsr CHKOUT
-    lda #0
-    sta copy_index
--   ldx copy_index
-    lda u1_command,x
-    beq +
-    jsr CHROUT
-    inc copy_index
-    bne -
-+   lda track
-    jsr print_decimal
-    lda #' '
-    jsr CHROUT
-    lda sector
-    jsr print_decimal
-    lda #KEY_RETURN
-    jsr CHROUT
-    jsr CLRCHN
-
-    ; the drive's answer, "00, ok,00,00" or e.g. "21,read error,..": keep the number
-    ldx #COMMAND_CHANNEL
-    jsr CHKIN
-    jsr CHRIN
-    and #$0f
-    asl
-    sta code
-    asl
-    asl
-    clc
-    adc code                            ; tens * 10
-    sta code
-    jsr CHRIN
-    and #$0f
-    clc
-    adc code
-    sta code
--   lda STATUS                          ; skip the rest of the line
-    bne +
-    jsr CHRIN
-    cmp #KEY_RETURN
-    bne -
-+   jsr CLRCHN
-
-    ; its 256 bytes
+    ldx #u1_command - block_commands
+    jsr block_command
     ldx #FILE_CHANNEL
     jsr CHKIN
     lda #0
@@ -638,6 +613,102 @@ read_sector:
     inc ptr+1
     lda code
     rts
+
+; The other way round: "B-P 2 0" points at the start of the drive buffer of channel 2, the 256 bytes at ptr
+; go into it, and "U2 2 0 track sector" writes it to the disk (ptr moves on a page). Returns the status code.
+write_sector:
+    ldx #COMMAND_CHANNEL
+    jsr CHKOUT
+    lda #bp_command - block_commands
+    sta copy_index
+    jsr print_command
+    lda #KEY_RETURN
+    jsr CHROUT
+    jsr CLRCHN
+    ldx #FILE_CHANNEL
+    jsr CHKOUT
+    lda #0
+    sta copy_index
+-   ldy copy_index
+    lda (ptr),y
+    jsr CHROUT
+    inc copy_index
+    bne -
+    jsr CLRCHN
+    inc ptr+1
+    ldx #u2_command - block_commands
+
+; Sends the command at block_commands+X with "track sector" (U1, U2) on the command channel. Returns the
+; status code of the drive's answer in A (also in code); the whole answer is in drive_line, as screen codes.
+; No answer at all (no drive) gives 99.
+block_command:
+    stx copy_index
+    ldx #COMMAND_CHANNEL
+    jsr CHKOUT
+    jsr print_command
+    lda track
+    jsr print_decimal
+    lda #' '
+    jsr CHROUT
+    lda sector
+    jsr print_decimal
+    lda #KEY_RETURN
+    jsr CHROUT
+    jsr CLRCHN
+
+    ; the drive's answer, "00, ok,00,00" or e.g. "21,read error,..."
+    ldx #COMMAND_CHANNEL
+    jsr CHKIN
+    lda #0
+    sta copy_index
+-   jsr CHRIN
+    cmp #KEY_RETURN
+    beq +
+    jsr petscii_to_screen_code
+    ldx copy_index
+    cpx #40
+    bcs ++
+    sta drive_line,x
+    inc copy_index
+++  lda STATUS
+    beq -
++   jsr CLRCHN
+    ldx copy_index
+    bne +
+    lda #99
+    sta code
+    rts
++   lda #' '
+-   cpx #40
+    beq +
+    sta drive_line,x
+    inx
+    bne -
++   lda drive_line                      ; the number: tens * 10 + units
+    and #$0f
+    asl
+    sta code
+    asl
+    asl
+    clc
+    adc code
+    sta code
+    lda drive_line+1
+    and #$0f
+    clc
+    adc code
+    sta code
+    rts
+
+; Prints the 0-terminated command at block_commands + copy_index to the current output channel
+print_command:
+-   ldx copy_index
+    lda block_commands,x
+    beq +
+    jsr CHROUT
+    inc copy_index
+    bne -
++   rts
 
 track_start:
     lda #<buffer
@@ -744,6 +815,214 @@ print_decimal:
 +   pla
     ora #'0'
     jmp CHROUT
+
+;------------------------------------------------------------------------------
+; Write a .d64 from the computer to the disk: the server sends it one track at a
+; time, every sector goes to the drive with "B-P" and "U2" (see write_sector)
+;------------------------------------------------------------------------------
+
+image_list:
+    lda #<image_loop
+    sta resume
+    lda #>image_loop
+    sta resume+1
+    lda #0
+show_image_page:
+    sta page
+    ldx #<path_images
+    ldy #>path_images
+    jsr url_begin
+    lda page
+    jsr url_add_hex
+    lda #'/'
+    jsr url_add
+    lda device
+    jsr url_add_hex
+    lda #WIC64_HTTP_GET
+    jsr send_request
+    +wic64_receive image_count, 2
+    +wic64_receive screen, 1000
+    +wic64_finalize
+    jsr apply_colors
+
+image_loop:
+    jsr GETIN
+    beq image_loop
+    cmp #KEY_LEFT_ARROW
+    beq +
+    cmp #KEY_DEL
+    bne ++
++   jmp read_directory                  ; also shows what is on the disk now
+++  cmp #KEY_F5
+    bne +
+    ldx device                          ; the next drive: 8, 9, 10, 11
+    inx
+    cpx #12
+    bcc ++
+    ldx #8
+++  stx device
+    lda page
+    jmp show_image_page
++   cmp #'+'
+    bne +
+    lda page
+    clc
+    adc #1
+    cmp image_pages
+    bcc ++
+    lda #0
+++  jmp show_image_page
++   cmp #'-'
+    bne +
+    lda page
+    bne ++
+    lda image_pages
+++  sec
+    sbc #1
+    jmp show_image_page
++   cmp #KEY_A
+    bcc image_loop
+    cmp #KEY_A+20
+    bcs image_loop
+    sbc #KEY_A-1                        ; carry is clear
+    cmp image_count
+    bcs image_loop
+
+    ; the server checks the image and asks: rows 23 and 24, then the format command
+    sta entry
+    ldx #<path_image
+    ldy #>path_image
+    jsr url_begin
+    lda page
+    jsr url_add_hex
+    lda #'/'
+    jsr url_add
+    lda entry
+    jsr url_add_hex
+    lda #WIC64_HTTP_GET
+    jsr send_request
+    ldx #39
+-   lda screen + 23*40,x
+    sta saved_row,x
+    dex
+    bpl -
+    +wic64_receive screen + 23*40, 80
+    +wic64_receive format_command, 25
+    +wic64_finalize
+    jsr white_status
+
+-   jsr GETIN
+    beq -
+    ldx #0
+    cmp #'Y'
+    beq +
+    inx
+    cmp #'F'
+    beq +
+    ldx #$ff                            ; any other key cancels
++   stx format_first
+    ldx #39
+-   lda saved_row,x
+    sta screen + 23*40,x
+    dex
+    bpl -
+    lda format_first
+    bpl +
+    +status msg_cancelled
+    jmp image_loop
+
++   beq +
+    +status msg_formatting
+    lda format_command
+    ldx #<format_command+1
+    ldy #>format_command+1
+    jsr drive_command                   ; its answer stays in the status line
+    bcc +
+    jmp show_error
+
++   jsr open_channels
+    bcc +
+    +status msg_no_drive
+    jmp show_error
++   lda #1
+    sta track
+write_track:
+    ldx #<path_write
+    ldy #>path_write
+    jsr url_begin
+    lda track
+    jsr url_add_hex
+    lda #WIC64_HTTP_GET
+    jsr send_request
+    lda #0
+    sta track_length
+    ldx track
+    lda sectors_per_track-1,x
+    sta track_length+1                  ; sectors * 256
+    +wic64_receive buffer, ~track_length
+    +wic64_receive status_row, 40       ; "Writing: track 12 of 35"
+    +wic64_finalize
+    jsr white_status
+
+    jsr track_start
+-   jsr write_sector
+    cmp #2                              ; 0 and 1 are fine, e.g. 26 = write protect on
+    bcs write_failed
+    jsr STOP
+    beq write_stopped
+    inc sector
+    ldx track
+    lda sector
+    cmp sectors_per_track-1,x
+    bcc -
+    inc track
+    lda track
+    cmp #36
+    bcs +
+    jmp write_track
+
++   jsr close_channels
+    jsr initialize_drive
+    ldx #<path_write                    ; "track 36": done, the server answers with the message
+    ldy #>path_write
+    jsr url_begin
+    lda #36
+    jsr url_add_hex
+    lda #WIC64_HTTP_GET
+    jsr send_request
+    +wic64_receive status_row, 40
+    +wic64_finalize
+    jsr white_status
+    jmp image_loop
+
+write_stopped:
+    jsr close_channels
+    jsr initialize_drive
+    +status msg_write_stopped
+    jmp image_loop
+
+; The drive's answer in red, e.g. "26,write protect on,01,00"
+write_failed:
+    jsr close_channels
+    jsr initialize_drive
+    lda code
+    cmp #99
+    bne +
+    +status msg_no_drive
+    jmp show_error
++   ldx #39
+-   lda drive_line,x
+    sta status_row,x
+    dex
+    bpl -
+    jmp show_error
+
+; "I0": the drive reads the BAM again, so it knows what is on the disk now
+initialize_drive:
+    lda #2
+    ldx #<i0_command
+    ldy #>i0_command
+    jmp drive_command
 
 ;------------------------------------------------------------------------------
 ; Back to the browser: load it from the server and run it
@@ -892,7 +1171,7 @@ on_wic64_error:
     inx
     bne -
 
-; The status line in light red; back to the main loop
+; The status line in light red; back to the main loop (or the image list)
 show_error:
     ldx main_stack
     txs
@@ -903,7 +1182,7 @@ show_error:
 -   sta color_ram + 24*40,x
     dex
     bpl -
-    jmp main_loop
+    jmp (resume)
 
 ; Reads the drive's status line (e.g. "62,file not found,00,00") into the status line
 show_drive_status:
@@ -1078,10 +1357,17 @@ path_directory: !text "d/dir/", 0
 path_page:      !text "d/page/", 0
 path_file:      !text "d/file/", 0
 path_track:     !text "d/track/", 0
+path_images:    !text "d/images/", 0
+path_image:     !text "d/image/", 0
+path_write:     !text "d/write/", 0
 path_browser:   !text "browser.prg", 0
 dollar:         !text "$"
 hash:           !text "#"
+block_commands:
 u1_command:     !text "U1 2 0 ", 0
+u2_command:     !text "U2 2 0 ", 0
+bp_command:     !text "B-P 2 0", 0
+i0_command:     !text "I0"
 type_letters:   !text "PSU"
 
 sectors_per_track:
@@ -1101,6 +1387,8 @@ msg_uploading:          !scr "Uploading... (RUN/STOP stops)", $ff
 msg_cannot_read:        !scr "This entry can't be uploaded", $ff
 msg_stopped:            !scr "Stopped", $ff
 msg_backup:             !scr "Backing up the disk... (RUN/STOP stops)", $ff
+msg_formatting:         !scr "Formatting the disk...", $ff
+msg_write_stopped:      !scr "Stopped: the disk is only partly written", $ff
 msg_loading_browser:    !scr "Loading the browser...", $ff
 msg_timeout:            !scr "Timeout: is the server on?", $ff
 msg_not_from_browser:   !scr "Start this plugin from the WiC64 browser", $ff
@@ -1117,6 +1405,10 @@ request_url:    !fill 112, 0             ; up to the address, "/d/track/01/" and
 url_length:     !byte 0
 
 main_stack:     !byte 0
+resume:         !word main_loop             ; where show_error goes back to
+!if <resume = $ff {
+    !error "jmp (resume) fails when resume is at the end of a page"
+}
 device:         !byte 8
 shifted:        !byte 0
 page:           !byte 0
@@ -1133,6 +1425,12 @@ app_status:     !byte 0
 data_end:       !word 0
 open_name:      !fill 20, 0
 sector_status:  !fill 21, 0
+drive_line:     !fill 40, 0             ; the drive's last answer to U1/U2
+image_count:    !byte 0                 ; received together: images on this page, pages
+image_pages:    !byte 1
+format_command: !fill 25, 0             ; length, "N0:name,id"
+format_first:   !byte 0
+track_length:   !word 0
 saved_row:      !fill 40, 0
 
 dir_count:      !byte 0                 ; received together: count, pages, names, disk name

@@ -75,6 +75,7 @@ screen data, drawn with the C64's character set, colors and border.
 - **Save to disk:** SHIFT+letter saves any program (also from inside a `.d64`) to drive 8, e.g. an SD2IEC.
 - **From the C64's disk to the computer:** the Disk tools plugin uploads files from drive 8–11, or backs up a whole
   disk as a `.d64`. On an SD2IEC it also browses folders and disk images and uploads the image files themselves.
+- **From the computer to a real disk:** Disk tools writes a `.d64` from the computer to a disk in drive 8–11.
 - **Pictures:** PNG, JPG, GIF, BMP and WebP photos are converted to C64 multicolor with per-cell palettes and dithering.
   Koala (`.koa`) pictures are shown as they are.
 - **SID music:**
@@ -394,7 +395,8 @@ reached it on, and adds the port when the WiC64 leaves it out: after the WiC64 t
 WiC64 portal), it sends the `Host` header without the port until it is switched off. Plugins are built by `make` from
 `c64/plugins/*.asm` into `build/plugins/`, and `make release` includes them.
 
-**Disk tools** (`c64/plugins/disk-tools.asm`) copies things from the C64's drive (8 to 11) to the computer:
+**Disk tools** (`c64/plugins/disk-tools.asm`) copies things from the C64's drive (8 to 11) to the computer, and writes
+`.d64` images from the computer to a real disk:
 
 | A folder on an SD2IEC: open it or a disk image, or upload | Inside a disk image: F3 asks for the backup's name |
 |:---:|:---:|
@@ -408,10 +410,11 @@ WiC64 portal), it sends the `Host` header without the port until it is switched 
 | SHIFT+A–T | SD2IEC: upload the disk image file itself instead of opening it |
 | INST/DEL | SD2IEC: one folder up, or out of a disk image (`CD:←`) |
 | F3 | Back up the whole disk as a `.d64` (35 tracks, 683 sectors); first asks for its name |
+| F7 | Write a `.d64` from the computer to the disk: choose it with A–T (F5 chooses the drive), then Y writes it, F formats the disk first |
 | F1 | Read the directory again, e.g. after changing the disk |
 | F5 | Next drive: 8, 9, 10, 11, then 8 again |
 | + / - | Next / previous page |
-| RUN/STOP | Stop an upload or backup |
+| RUN/STOP | Stop an upload, backup or write |
 | ← | Back to the browser |
 
 - Uploads land in `content/prg/From C64/`, so they show up in the browser and the web UI right away. Existing files are
@@ -432,6 +435,25 @@ WiC64 portal), it sends the `Host` header without the port until it is switched 
   without the address screen, also when the SD2IEC is in another folder than the one with the saved address.
 - **Speed:** a stock 1541 reads about 400 bytes per second over the serial bus, so a full disk takes roughly 7 minutes;
   an SD2IEC is faster.
+
+**Writing a disk image to a real disk** (F7) is the backup the other way round, so a `.d64` goes from the computer to
+a physical disk without a ZoomFloppy or a copy program:
+
+- F7 lists the `.d64` images in `content/prg` (with subfolders) and in the upload folder, 20 per page. Put an image
+  there, or drag it into the web UI. F5 in the list switches the drive (8–11), ← goes back to the drive's directory.
+- A–T chooses an image; the server checks it and asks: **Y** writes it, **F** formats the disk first, any other key
+  cancels. Format a new or blank disk first. Formatting uses the image's disk ID (`N0:name,id`), so the sector headers
+  match the image. Without formatting, the disk keeps its own ID in the headers, which DOS doesn't mind.
+- The C64 gets one track at a time from the server (at most 21 sectors, 5.4 KB, so no REU is needed) and writes every
+  sector with `B-P` and `U2`. The first error stops it with the drive's message in red, e.g.
+  `26,write protect on,01,00`. RUN/STOP stops it too, leaving the disk partly written. Afterwards `I0` makes the drive
+  read the new BAM.
+- The whole disk is written, all 683 sectors, also the empty ones, so the result is an exact copy of the image's data,
+  including games that keep data outside files.
+- Only standard 35-track images (174,848 bytes, or 175,531 with error info, which is ignored). 40-track images,
+  `.g64` and copy protection need tools that write the raw track data, not DOS sectors.
+- **Speed:** limited by the serial bus and the drive's write and verify. In VICE (true 1541 emulation) a disk takes
+  about 10½ minutes, and formatting first adds about 75 seconds; a drive-side fast writer could bring it down to 1–2 minutes (see [Ideas for later](#ideas-for-later)).
 
 ## Music
 
@@ -542,6 +564,9 @@ Most responses start with a status byte: `$00` = OK, followed by the payload; `$
 | `POST /d/file/{page}/{entry}/{part}/{last}` | Disk tools: part of an uploaded file |
 | `POST /d/track/{track}` | Disk tools: one track of a disk backup (sectors + one status code per sector) |
 | `POST /d/track/01/{name}` | the first track, with the name typed on the C64 (PETSCII in hex) |
+| `/d/images/{page}/{device}` | Disk tools: a page of the `.d64` images to write to drive `device` (page 0 looks again) |
+| `/d/image/{page}/{entry}` | Disk tools: choose the image -> the question and the format command (`N0:name,id`) |
+| `/d/write/{track}` | Disk tools: the sectors of one track of the image and a status line; track `24` (36): done |
 | `POST /push?name=..&save=1&run=0` | queue a `.prg` for the C64 (used by `make push`; `run=0`: save only) |
 | `/`, `/api/...` | web UI and its JSON API (only from the computer itself) |
 
@@ -663,6 +688,8 @@ build/                     generated by make (browser.prg, standalone.bin, loadh
 
 - **Modular browser:** features loaded from the server on demand, so the C64 side can keep growing.
 - **Disk images:** `.t64`, REL files, and a writable virtual drive (SAVE to the computer).
+- **Faster disk writing:** a small fast writer in the 1541's own memory (`M-W`/`M-E`) that receives a track with a
+  fast transfer and writes it in one revolution.
 - **Search:** type a few letters to find a tune in the full High Voltage SID Collection.
 - **Playlists:** jukebox and slideshow modes (pictures cycling while music plays).
 - **Computer dashboard:** clock, calendar, now playing on Spotify/Music, with remote control from the C64.

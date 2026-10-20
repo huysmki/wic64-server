@@ -8,7 +8,8 @@ namespace Wic64Server.Uploads;
 /// <summary>
 /// What the disk tools plugin (c64/plugins/disk-tools.asm) does with the C64's drive (8-11): its directory,
 /// files uploaded from it and whole disks backed up as .d64. Everything ends up in the UploadFolder setting
-/// (by default content/prg/From C64, so it shows up in the browser and the web UI).
+/// (by default content/prg/From C64, so it shows up in the browser and the web UI). The other way round,
+/// a .d64 from the computer is written to a real disk, one track at a time.
 /// </summary>
 public sealed class DriveSession(ServerOptions options, ActivityLog activity, ILogger<DriveSession> log)
 {
@@ -150,8 +151,8 @@ public sealed class DriveSession(ServerOptions options, ActivityLog activity, IL
                 screen.Print(row, 36, $"{onPage[i].Blocks,3}", 3);
             }
 
-            screen.Print(22, 1, "A-T open/upload DEL up F3 backup disk");
-            screen.Print(23, 1, "F1 read  F5 drive  +/- page  ← browser");
+            screen.Print(22, 1, "A-T open/upload DEL up F1 read F5 drive");
+            screen.Print(23, 1, "F3 backup F7 write .d64 +/- page ← back");
             screen.Print(24, 0, $"{blocksFree} blocks free - uploads to {UploadFolderName}", 40);
 
             var disk = new byte[17];
@@ -248,6 +249,134 @@ public sealed class DriveSession(ServerOptions options, ActivityLog activity, IL
             activity.Add("disk", $"Backed up \"{backupName}\" from drive {device} as {UploadFolderName}/{Path.GetFileName(path)}" +
                                  (badSectors > 0 ? $" ({badSectors} unreadable sectors)" : ""));
             return $"Saved as {Path.GetFileName(path)}" + (badSectors > 0 ? $" ({badSectors} bad)" : "");
+        }
+    }
+
+    // -------------------------------------------------------------------------------------------
+    // Writing a .d64 to a real disk
+
+    const int ImageWithErrorsSize = ImageSize + 683; // one error code per sector appended; those are ignored
+    List<string> images = [];
+    byte[]? writeImage;
+    string writeName = "";
+
+    string PrgFolder => Path.Combine(options.ContentFolder, "prg");
+
+    /// <summary>
+    /// One page of the .d64 images on the computer (the Programs folder with its subfolders, and the upload
+    /// folder): count, pages, then the screen. Page 0 looks for the images again. The image is written to
+    /// drive (8-11).
+    /// </summary>
+    public byte[] ImagePage(int page, int drive)
+    {
+        lock (sessionLock)
+        {
+            device = drive;
+            if (page == 0)
+            {
+                var folders = new[] { PrgFolder, UploadFolder }.Where(Directory.Exists).Distinct();
+                images = folders.SelectMany(f => Directory.EnumerateFiles(f, "*", SearchOption.AllDirectories))
+                    .Where(f => Path.GetExtension(f).Equals(".d64", StringComparison.OrdinalIgnoreCase))
+                    .Distinct()
+                    .OrderBy(f => DisplayPath(f), StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+            }
+
+            var pages = Math.Max(1, (images.Count + PageSize - 1) / PageSize);
+            page = Math.Clamp(page, 0, pages - 1);
+            var onPage = images.Skip(page * PageSize).Take(PageSize).ToList();
+
+            var screen = new Screen();
+            screen.Print(0, 0, $" Write a disk image to drive {device}", 33, reverse: true);
+            screen.Print(0, 33, $" {page + 1:00}/{pages:00}", 7, reverse: true);
+            if (onPage.Count == 0)
+                screen.Print(3, 2, "No .d64 images in the Programs folder");
+            for (var i = 0; i < onPage.Count; i++)
+            {
+                var row = 2 + i;
+                var folder = Path.GetDirectoryName(DisplayPath(onPage[i])) ?? "";
+                screen.Print(row, 1, ((char)('A' + i)).ToString(), reverse: true);
+                screen.Print(row, 3, Path.GetFileNameWithoutExtension(onPage[i]), folder == "" ? 37 : 23);
+                if (folder != "")
+                    screen.Print(row, 27, folder.Length <= 13 ? folder : ".." + folder[^11..], 13);
+            }
+
+            screen.Print(22, 1, "A-T write the image to the disk");
+            screen.Print(23, 1, "F5 drive  +/- page  ← back");
+            screen.Print(24, 0, "Careful: this overwrites the whole disk", 40);
+
+            return [(byte)onPage.Count, (byte)pages, .. screen.Data];
+        }
+    }
+
+    string DisplayPath(string path) =>
+        Path.GetRelativePath(path.StartsWith(PrgFolder + Path.DirectorySeparatorChar) ? PrgFolder : Path.GetDirectoryName(UploadFolder)!, path);
+
+    /// <summary>
+    /// Chooses the image to write: returns rows 23 and 24 of the question for the C64 (80 screen codes), then
+    /// the command that formats the disk with the image's ID (length and 24 bytes PETSCII, "N0:name,id").
+    /// </summary>
+    public byte[] ChooseImage(int page, int index)
+    {
+        lock (sessionLock)
+        {
+            var position = page * PageSize + index;
+            if (position < 0 || position >= images.Count)
+                throw new InvalidOperationException("image not in the list");
+
+            var path = images[position];
+            var data = File.ReadAllBytes(path);
+            if (data.Length is not (ImageSize or ImageWithErrorsSize))
+                throw new InvalidOperationException(data.Length is 196608 or 197376
+                    ? "40-track images can't be written"
+                    : "not a 35-track .d64 image");
+
+            writeImage = data[..ImageSize];
+            writeName = Path.GetFileName(path);
+
+            // The BAM (track 18, sector 0): the disk's name at $90 and its ID at $a2
+            var bam = writeImage.AsSpan(SectorsPerTrack.Take(17).Sum() * 256, 256);
+            var name = bam.Slice(0x90, 16).ToArray().Where(c => c is not (0xa0 or (byte)',' or (byte)':' or (byte)'"' or (byte)'*' or (byte)'?')).ToArray();
+            var format = new byte[25];
+            byte[] command = [.. "N0:"u8, .. name.Length == 0 ? "DISK"u8.ToArray() : name, (byte)',', bam[0xa2], bam[0xa3]];
+            format[0] = (byte)command.Length;
+            command.CopyTo(format, 1);
+
+            var question = ScreenCodes.Line(" Y: write  F: format first  N: cancel");
+            var line = ScreenCodes.Line($"Write {Path.GetFileNameWithoutExtension(path)} to drive {device}?");
+            return [.. question, .. line, .. format];
+        }
+    }
+
+    /// <summary>
+    /// The sectors of one track of the chosen image (256 bytes each), then the status line to show while the
+    /// plugin writes them. Track 36 means all tracks are written: only the final message.
+    /// </summary>
+    public byte[] ImageTrack(int track)
+    {
+        lock (sessionLock)
+        {
+            if (writeImage is null)
+                throw new InvalidOperationException("no image chosen");
+            if (track is < 1 or > 36)
+                throw new InvalidOperationException($"bad track {track}");
+
+            if (track == 1)
+            {
+                log.LogInformation("Writing {File} to drive {Device}", writeName, device);
+                activity.Add("disk", $"Writing {writeName} to drive {device}");
+            }
+            if (track == 36)
+            {
+                log.LogInformation("Wrote {File} to drive {Device}", writeName, device);
+                activity.Add("disk", $"Wrote {writeName} to drive {device}");
+                writeImage = null;
+                return ScreenCodes.Line($"Done: {writeName} is on the disk");
+            }
+
+            var offset = SectorsPerTrack.Take(track - 1).Sum() * 256;
+            var sectors = writeImage.AsSpan(offset, SectorsPerTrack[track - 1] * 256).ToArray();
+            return [.. sectors, .. ScreenCodes.Line($"Writing: track {track} of 35 (RUN/STOP stops)")];
         }
     }
 

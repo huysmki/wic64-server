@@ -16,6 +16,9 @@ namespace Wic64Server.Api;
 /// POST /d/file/{page}/{entry}/{part}/{last}  part of a file (last = 1: the final part) -> message line when done
 /// POST /d/track/{track}                   one track of a disk backup (sectors + status codes) -> message line
 /// POST /d/track/01/{name}                 the first track, with the name of the .d64 (PETSCII in hex)
+/// GET  /d/images/{page}/{device}          the .d64 images on the computer, see DriveSession.ImagePage
+/// GET  /d/image/{page}/{entry}            choose the image to write -> question and format command
+/// GET  /d/write/{track}                   its sectors for track 1-35 and a status line; 24 (36): done
 /// </code>
 /// </remarks>
 public sealed class DriveEndpoints(DriveSession drive, ILogger<DriveEndpoints> log)
@@ -28,6 +31,9 @@ public sealed class DriveEndpoints(DriveSession drive, ILogger<DriveEndpoints> l
         app.MapPost("/d/file/{page}/{index}/{part}/{last}", FilePart);
         app.MapPost("/d/track/{track}", (HttpRequest request, string track) => Track(request, track, null));
         app.MapPost("/d/track/{track}/{name}", Track);
+        app.MapGet("/d/images/{page}/{device}", ImagePage);
+        app.MapGet("/d/image/{page}/{index}", ChooseImage);
+        app.MapGet("/d/write/{track}", ImageTrack);
     }
 
     async Task<IResult> Directory(HttpRequest request, string device)
@@ -79,6 +85,41 @@ public sealed class DriveEndpoints(DriveSession drive, ILogger<DriveEndpoints> l
         {
             log.LogWarning(e, "Disk backup from the C64 failed");
             return Error($"backup: {e.Message}");
+        }
+    }
+
+    IResult ImagePage(string page, string device) =>
+        ParseHex(page) is { } p && ParseHex(device) is { } d and >= 8 and <= 11 ? Ok(drive.ImagePage(p, d)) : Error("bad page");
+
+    IResult ChooseImage(string page, string index)
+    {
+        if (ParseHex(page) is not { } p || ParseHex(index) is not { } i)
+            return Error("bad image request");
+
+        try
+        {
+            return Ok(drive.ChooseImage(p, i));
+        }
+        catch (Exception e)
+        {
+            log.LogWarning(e, "Could not open the image to write");
+            return Error(e.Message);
+        }
+    }
+
+    IResult ImageTrack(string track)
+    {
+        if (ParseHex(track) is not { } t)
+            return Error("bad track");
+
+        try
+        {
+            return Ok(drive.ImageTrack(t));
+        }
+        catch (Exception e)
+        {
+            log.LogWarning(e, "Writing an image to the C64's disk failed");
+            return Error($"write: {e.Message}");
         }
     }
 
