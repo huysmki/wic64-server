@@ -28,7 +28,8 @@ namespace Wic64Server.Api;
 /// GET /l/{folder}/{name}              LOAD from the helper, name in hex: .prg file, or only status $01;
 ///                                     name 00: the file helper (c64/filehelper.asm) for the starter,
 ///                                     name 01: the LOAD guard (c64/loadguard.asm), 02: the save helper
-///                                     (c64/savehelper.asm), 03: the LOAD module (c64/loadmodule.asm)
+///                                     (c64/savehelper.asm), 03: the LOAD module (c64/loadmodule.asm);
+///                                     10, 11: a packed program unpacked (Programs/Unpacker.cs), 12: its launcher
 /// GET /f/{folder}/{chunk}/{name}      OPEN from the file helper, name in hex: last chunk? (0/1) and up to 64 bytes
 ///                                     of the file, or only status $01
 /// GET /f/{folder}/0000/{name}        ... a name opened for writing (",W", ",A"): only status $02 when the server takes it

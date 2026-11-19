@@ -3,7 +3,8 @@ namespace Wic64Server.Programs;
 /// <summary>
 /// What the programs of a disk (or folder) do with memory, guessed from their bytes: where they load, which pages
 /// their instructions address, whether they write into the LOAD helper and whether they LOAD more files. Every byte
-/// is read as if an instruction could start there, so data counts too: the result errs on the side of "used".
+/// of a file that looks like code is read as if an instruction could start there, so data inside it counts too: the
+/// result errs on the side of "used". Packed programs are unpacked first (see Unpacker).
 /// </summary>
 public sealed class MemoryScan
 {
@@ -57,16 +58,137 @@ public sealed class MemoryScan
         for (var page = load >> 8; page <= (end - 1) >> 8; page++)
             used[page] = true;
 
-        var overwrites = load <= 0x03fb && end > 0x02a7;
+        // Follow the code from where it starts: the SYS address of a BASIC line, or the load address
+        var entry = Unpacker.SysAddress(prg) ?? (IsBasic(prg) ? (ushort?)null : (ushort)load);
+        var memory = new byte[0x10000];
+        prg.AsSpan(2, end - load).CopyTo(memory.AsSpan(load));
+        var followed = entry is { } start && Follow(memory, start);
+        ScanCode(name, prg, load <= 0x03fb && end > 0x02a7, references: !followed);
+    }
+
+    /// <summary>
+    /// Adds a program unpacked on the server: the C64's memory from $0800 when the real program starts. Pages that are
+    /// all zero count as free, wherever they are.
+    /// </summary>
+    public void AddMemory(string name, byte[] memory, ushort? entry)
+    {
+        var followed = entry is { } start && Follow(memory, start);
+        for (var page = 0x08; page < 0x100; page++)
+        {
+            if (NonZero(memory, page))
+                used[page] = true;
+        }
+
+        // Each stretch of used pages on its own: what an unpacker leaves behind is not code
+        for (var page = 0x08; page < 0x100; page++)
+        {
+            if (!NonZero(memory, page))
+                continue;
+            var first = page;
+            while (page + 1 < 0x100 && NonZero(memory, page + 1))
+                page++;
+            ScanCode(name, [0x00, (byte)first, .. memory.AsSpan(first << 8, (page - first + 1) << 8)], false, references: !followed);
+        }
+    }
+
+    static bool NonZero(byte[] memory, int page) => memory.AsSpan(page << 8, 0x100).IndexOfAnyExcept((byte)0) >= 0;
+
+    /// <summary>
+    /// Code, not data (music, pictures, packed bytes): it has at least 3 calls into itself or the KERNAL's jump table.
+    /// Data read as instructions would "address" every page.
+    /// </summary>
+    static bool LooksLikeCode(byte[] prg)
+    {
+        var load = prg[0] | prg[1] << 8;
+        var end = load + prg.Length - 2;
+        var calls = 0;
+        for (var i = 2; i + 2 < prg.Length && calls < 3; i++)
+        {
+            if (prg[i] != 0x20)
+                continue;
+            var address = prg[i + 1] | prg[i + 2] << 8;
+            if ((address >= load && address < end) || address is >= 0xff81 and <= 0xfff3)
+                calls++;
+        }
+
+        return calls >= 3;
+    }
+
+    /// <summary>Opcodes of one byte; the others without a 16-bit address have two.</summary>
+    static readonly HashSet<byte> OneByteOpcodes =
+    [
+        0x00, 0x08, 0x18, 0x28, 0x38, 0x40, 0x48, 0x58, 0x60, 0x68, 0x78, 0x88, 0x8a, 0x98, 0x9a, 0xa8, 0xaa, 0xb8, 0xba,
+        0xc8, 0xca, 0xd8, 0xe8, 0xea, 0xf8, 0x0a, 0x2a, 0x4a, 0x6a, 0x1a, 0x3a, 0x5a, 0x7a, 0xda, 0xfa,
+    ];
+
+    const int MinFollowed = 40;
+
+    /// <summary>
+    /// Follows the code from <paramref name="entry"/> through branches, jumps and calls, and marks the pages its
+    /// instructions address. False when that reaches too little code to rely on (the program jumps through vectors or
+    /// tables, or the entry is a guess): the caller then reads every byte as an instruction.
+    /// </summary>
+    bool Follow(byte[] memory, ushort entry)
+    {
+        var pages = new HashSet<int>();
+        var visited = new HashSet<int>();
+        var todo = new Stack<int>();
+        todo.Push(entry);
+        while (todo.Count > 0)
+        {
+            var pc = todo.Pop();
+            while (pc is >= 0x0200 and < 0xfffe && visited.Add(pc))
+            {
+                var opcode = memory[pc];
+                if (opcode is 0x00 or 0x40 or 0x60 || (opcode & 0x0f) == 0x02 && opcode is not (0x82 or 0xa2 or 0xc2 or 0xe2))
+                    break; // BRK, RTI, RTS or a halt
+
+                if ((opcode & 0x1f) == 0x10) // a branch: both ways
+                {
+                    todo.Push(pc + 2 + (sbyte)memory[pc + 1]);
+                    pc += 2;
+                }
+                else if (AddressOpcodes.Contains(opcode))
+                {
+                    var address = memory[pc + 1] | memory[pc + 2] << 8;
+                    pages.Add(address >> 8);
+                    if (opcode is 0x20 or 0x4c && address < 0xe000 && memory[address] != 0)
+                        todo.Push(address);
+                    if (opcode is 0x4c or 0x6c)
+                        break;
+                    pc += 3;
+                }
+                else
+                {
+                    pc += OneByteOpcodes.Contains(opcode) ? 1 : 2;
+                }
+            }
+        }
+
+        if (visited.Count < MinFollowed)
+            return false;
+        foreach (var page in pages)
+            used[page] = true;
+        return true;
+    }
+
+    /// <summary>
+    /// What a program does, from its bytes read as instructions; with <paramref name="references"/> also the pages
+    /// those address, when the file looks like code.
+    /// </summary>
+    void ScanCode(string name, byte[] prg, bool overwrites, bool references)
+    {
         if (prg.AsSpan().IndexOf("M-W"u8) >= 0 || prg.AsSpan().IndexOf("M-E"u8) >= 0)
             SendsDriveCode = true;
+        references = references && LooksLikeCode(prg);
         for (var i = 2; i + 2 < prg.Length; i++)
         {
             if (!AddressOpcodes.Contains(prg[i]))
                 continue;
 
             var address = prg[i + 1] | prg[i + 2] << 8;
-            used[address >> 8] = true;
+            if (references)
+                used[address >> 8] = true;
             if (prg[i] is 0x20 or 0x4c && address is 0xffd5 or 0xf49e)
                 LoadsFiles = true;
             if (prg[i] is 0x20 or 0x4c && address is 0xffd8 or 0xf5dd)

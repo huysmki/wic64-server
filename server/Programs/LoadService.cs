@@ -25,6 +25,7 @@ public sealed class LoadService(Catalog catalog, ServerOptions options, Activity
     (string Name, byte[] Program)? started;
     (string Key, byte[] Data)? openFile;
     readonly List<(int Page, int Pages)> placed = []; // where the starter's modules went, so the next ones go elsewhere
+    int? stagingPage; // where the launcher of an unpacked program stages the RAM under the I/O area
     byte[]? loadModule; // the LOAD module for the program that is starting: placed first, asked for last
 
     /// <summary>
@@ -68,6 +69,52 @@ public sealed class LoadService(Catalog catalog, ServerOptions options, Activity
     {
         lock (startedLock)
             started = (name, program);
+        if (Unpacker.Unpack(program) is { } unpacked)
+            activity.Add("load", $"{name} is packed: unpacked on the server, {unpacked.Start}");
+    }
+
+    /// <summary>
+    /// For the program that is starting, when it is packed (see <see cref="Unpacker"/>): its unpacked memory below
+    /// (part 0) and above (part 1) the I/O area, which the starter loads over the packed program before the helpers
+    /// (file names $10 and $11), and the launcher that starts it, after them ($12); the launcher itself LOADs the RAM
+    /// under the I/O area through 16 staging pages ($13, then $14 for those pages' own contents). Otherwise only an RTS; but as
+    /// the last module ($12), code that sets the end of the LOAD ($ae/$af) to the program's end, like the KERNAL's
+    /// LOAD leaves it: unpackers read it, and loading the modules changed it.
+    /// </summary>
+    public byte[] UnpackedPart(int part)
+    {
+        lock (startedLock)
+        {
+            if (started is not { } program)
+                return NoModule;
+            if (Unpacker.Unpack(program.Program) is { } unpacked)
+            {
+                switch (part)
+                {
+                    case 0 or 1:
+                        return part < unpacked.Parts.Count ? unpacked.Parts[part] : NoModule;
+                    case 2:
+                        // 16 pages below the I/O area that no helper sits on, to pass the RAM under the I/O area through
+                        stagingPage = unpacked.UnderIo
+                            ? Enumerable.Range(0x08, 0xc0 - 0x08 + 1).Cast<int?>().FirstOrDefault(first =>
+                                !placed.Any(p => p.Page < first + 16 && first < p.Page + p.Pages))
+                            : null;
+                        return unpacked.Launch(stagingPage);
+                    case 3 or 4 when stagingPage is { } page:
+                        return unpacked.Pages(page, underIo: part == 3);
+                    default:
+                        return NoModule;
+                }
+            }
+
+            if (part != 2 || program.Program.Length < 3)
+                return NoModule;
+
+            // In the stack page between the starter (to $01c3) and the stack: lda #<end, sta $ae, lda #>end, sta $af,
+            // rts; the entry: jmp $01d0
+            var end = (program.Program[0] | program.Program[1] << 8) + program.Program.Length - 2;
+            return [0xd0, 0x01, 0xa9, (byte)end, 0x85, 0xae, 0xa9, (byte)(end >> 8), 0x85, 0xaf, 0x60, 0x4c, 0xd0, 0x01];
+        }
     }
 
     /// <summary>
@@ -312,7 +359,13 @@ public sealed class LoadService(Catalog catalog, ServerOptions options, Activity
     {
         var scan = new MemoryScan();
         foreach (var (name, program) in programs)
-            scan.Add(name, program);
+        {
+            if (Unpacker.Unpack(program) is { } unpacked)
+                scan.AddMemory(name, unpacked.Memory, unpacked.Code); // what the real program uses, not what its packed bytes look like
+            else
+                scan.Add(name, program);
+        }
+
         return scan;
     }
 
@@ -431,6 +484,8 @@ public sealed class LoadService(Catalog catalog, ServerOptions options, Activity
             return SaveHelper(folder);
         if (petsciiName is [3])
             return LoadModule();
+        if (petsciiName is [>= 0x10 and <= 0x14])
+            return UnpackedPart(petsciiName[0] - 0x10);
 
         var name = StripDrive(petsciiName);
         var (path, isDiskImage) = catalog.PathOf(Section.Programs, folder);

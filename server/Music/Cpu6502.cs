@@ -2,8 +2,8 @@ namespace Wic64Server.Music;
 
 /// <summary>
 /// A small 6502 emulator (official opcodes plus the common undocumented ones), used to find out
-/// which memory a SID tune really writes to. It has no video or timing: I/O reads return
-/// harmless values and I/O writes are ignored.
+/// which memory a SID tune really writes to, and to run the unpacker of a packed program (Programs/Unpacker.cs).
+/// It has no video or timing: I/O reads return harmless values and I/O writes are ignored.
 /// </summary>
 public sealed class Cpu6502
 {
@@ -13,6 +13,22 @@ public sealed class Cpu6502
 
     /// <summary>RAM addresses written by the program (I/O writes are not included).</summary>
     public bool[] Written { get; } = new bool[0x10000];
+
+    /// <summary>Number of writes to RAM so far.</summary>
+    public long Writes { get; private set; }
+
+    /// <summary>The I/O registers the program wrote, with the last value, in the order of their last write.</summary>
+    public Dictionary<int, byte> IoWrites { get; } = [];
+
+    public ushort Pc { get => pc; set => pc = value; }
+    public byte A => a;
+    public byte X => x;
+    public byte Y => y;
+    public byte Sp { get => sp; set => sp = value; }
+    public bool InterruptsOff => interrupt;
+
+    /// <summary>Executes one instruction; false for an unknown opcode or BRK.</summary>
+    public bool StepOne() => Step();
 
     byte a, x, y, sp = 0xfd;
     ushort pc;
@@ -24,7 +40,7 @@ public sealed class Cpu6502
         Adc, And, Asl, Bcc, Bcs, Beq, Bit, Bmi, Bne, Bpl, Brk, Bvc, Bvs, Clc, Cld, Cli, Clv, Cmp, Cpx, Cpy,
         Dec, Dex, Dey, Eor, Inc, Inx, Iny, Jmp, Jsr, Lda, Ldx, Ldy, Lsr, Nop, Ora, Pha, Php, Pla, Plp,
         Rol, Ror, Rti, Rts, Sbc, Sec, Sed, Sei, Sta, Stx, Sty, Tax, Tay, Tsx, Txa, Txs, Tya,
-        Lax, Sax, Dcp, Isc, Slo, Rla, Sre, Rra, Anc, Alr, Unknown,
+        Lax, Sax, Dcp, Isc, Slo, Rla, Sre, Rra, Anc, Alr, Sbx, Unknown,
     }
 
     enum Mode { Implied, Accumulator, Immediate, ZeroPage, ZeroPageX, ZeroPageY, Absolute, AbsoluteX, AbsoluteY, Indirect, IndirectX, IndirectY, Relative }
@@ -60,11 +76,22 @@ public sealed class Cpu6502
         return false;
     }
 
-    bool IoVisible => (Memory[1] & 0x03) != 0;
+    // CPU port: with bit 0 or 1 set, $d000-$dfff is the I/O area (bit 2 set) or the character ROM (bit 2 clear)
+    bool IoVisible => (Memory[1] & 0x03) != 0 && (Memory[1] & 0x04) != 0;
+    bool CharRomVisible => (Memory[1] & 0x03) != 0 && (Memory[1] & 0x04) == 0;
+
+    /// <summary>The program read the character ROM, which this emulator does not have (it read zeros).</summary>
+    public bool ReadCharRom { get; private set; }
 
     byte Read(int address)
     {
         address &= 0xffff;
+        if (address is >= 0xd000 and < 0xe000 && CharRomVisible)
+        {
+            ReadCharRom = true;
+            return 0;
+        }
+
         if (address is >= 0xd000 and < 0xe000 && IoVisible)
         {
             return address switch
@@ -83,8 +110,13 @@ public sealed class Cpu6502
     {
         address &= 0xffff;
         if (address is >= 0xd000 and < 0xe000 && IoVisible)
+        {
+            IoWrites.Remove(address);
+            IoWrites[address] = value;
             return;
+        }
 
+        Writes++;
         Memory[address] = value;
         if (address is < 0x0100 or >= 0x0200) // ignore the stack
             Written[address] = true;
@@ -196,6 +228,13 @@ public sealed class Cpu6502
             }
             case Op.Anc: a = SetNz((byte)(a & Read(address))); carry = negative; break;
             case Op.Alr: a = (byte)(a & Read(address)); carry = (a & 1) != 0; a = SetNz((byte)(a >> 1)); break;
+            case Op.Sbx:
+            {
+                var result = (a & x) - Read(address);
+                carry = result >= 0;
+                x = SetNz((byte)result);
+                break;
+            }
 
             case Op.Inc: Write(address, SetNz((byte)(Read(address) + 1))); break;
             case Op.Dec: Write(address, SetNz((byte)(Read(address) - 1))); break;
@@ -388,6 +427,8 @@ public sealed class Cpu6502
         Set(Op.Sax, Mode.IndirectX, 0x83); Set(Op.Sax, Mode.ZeroPage, 0x87); Set(Op.Sax, Mode.Absolute, 0x8f); Set(Op.Sax, Mode.ZeroPageY, 0x97);
         Set(Op.Anc, Mode.Immediate, 0x0b, 0x2b);
         Set(Op.Alr, Mode.Immediate, 0x4b);
+        Set(Op.Sbx, Mode.Immediate, 0xcb);
+        Set(Op.Lax, Mode.Immediate, 0xab);
 
         Set(Op.Ldx, Mode.Immediate, 0xa2); Set(Op.Ldx, Mode.ZeroPage, 0xa6); Set(Op.Ldx, Mode.Absolute, 0xae);
         Set(Op.Ldx, Mode.ZeroPageY, 0xb6); Set(Op.Ldx, Mode.AbsoluteY, 0xbe);

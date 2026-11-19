@@ -359,6 +359,21 @@ files by scanning their code (a strong hint, not a certainty), and moves the hel
 the LOAD module (`c64/loadmodule.asm`, 2 pages), the same LOAD from the server on free pages, placed like the file
 helper and before it. The activity log says "LOAD module at …".
 
+**Packed programs.** Most programs on CSDb are packed: they start with an unpacker that writes over nearly all
+memory, including every helper the browser installed. The server therefore unpacks them itself
+(`server/Programs/Unpacker.cs`): it runs the unpacker in its 6502 emulator until that jumps to the real program.
+The starter then loads the unpacked memory over the packed program, puts the helpers where the real program leaves
+room, and a small launcher sets the registers and zero-page values the unpacker left and jumps to the program. The
+activity log says "… is packed: unpacked on the server". Saving to disk (SHIFT+letter) still saves the packed
+original. A program only counts as packed when its `SYS` line leads to a far jump into memory it wrote itself,
+without KERNAL calls or hardware setup on the way; anything else starts as it is. For programs that aren't unpacked,
+the starter's last module sets the end address of the LOAD (`$ae/$af`) to the program's end, which unpackers read.
+
+**Where helpers go.** To find free pages, the server follows a program's code from its start address (through
+branches, calls and jumps) and notes the pages its instructions address. Only when that reaches little code does it
+read every byte as a possible instruction, and only for files that look like code (data files like music would
+"address" every page).
+
 Only when the disk's programs leave no 2 pages free does the menu show **"! Overwrites the LOAD helper: may hang"**
 above the list, and the activity log warns when you start one. Such disks need a real drive or an SD2IEC; CD64 is an
 example. A program that resets the KERNAL vectors itself also loses the helper, wherever it lives.
@@ -634,7 +649,7 @@ Most responses start with a status byte: `$00` = OK, followed by the payload; `$
 | `/x` | is something pushed? 0 = no, 1 = run, 2 = save + run, 3 = show picture, 4 = play tune, 5 = save only |
 | `/x/p`, `/x/i`, `/x/s` | the pushed program, picture or tune, in the same format as `/p`, `/i` and `/s` |
 | `/h` | LOAD helper code for `$02a7` and `$0334` |
-| `/l/{folder}/{name in hex}` | a file for the LOAD helper, or only status `$01` (then the real drive is used); name `00`: the file helper, `01`: the LOAD guard, `02`: the save helper, `03`: the LOAD module, relocated, or only an RTS at `$03fc` |
+| `/l/{folder}/{name in hex}` | a file for the LOAD helper, or only status `$01` (then the real drive is used); name `00`: the file helper, `01`: the LOAD guard, `02`: the save helper, `03`: the LOAD module, relocated, or only an RTS at `$03fc`; `10`/`11`: a packed program unpacked (below/above the I/O area), `12`: its launcher |
 | `/f/{folder}/{chunk}/{name in hex}` | 64 bytes of a file the file helper OPENs, after a byte 1 for the last chunk (else 0); only `$02` when opened for writing; or only status `$01` |
 | `POST /a/{folder}/{part}/{name in hex}` | up to 64 bytes the file helper writes (part: bit 15 on the last one, at CLOSE; then also as GET without data) -> `$00`, or `$01` + message |
 | `/c/{folder}/{command in hex}` | a command on channel 15 -> `$00` and the drive status, e.g. `00, OK,00,00` |
@@ -657,7 +672,7 @@ Most responses start with a status byte: `$00` = OK, followed by the payload; `$
 
 | Range | Use |
 |-------|-----|
-| `$0100-$01ab` | Starter: receives the end of a program over the browser, fetches the file helper and LOAD guard, starts the program |
+| `$0100-$01c3` | Starter: receives the end of a program over the browser, fetches the modules (an unpacked program, the helpers, the launcher), starts the program |
 | `$0200-$0258` | WiC64 request header and URL (BASIC input buffer); used by the LOAD helper too |
 | `$02a7-$02ff` | Message line and folder ids; part of the LOAD helper while a program runs |
 | `$0334-$03fb` | Standalone SID player or LOAD helper (both sent by the server) |
@@ -713,6 +728,7 @@ server/                    ASP.NET Core minimal API (.NET 10)
     Plugins.cs             fills in the server address in plugins
     LoadService.cs         files and directory listings for the LOAD and file helper
     MemoryScan.cs          which memory a disk's programs use; do they overwrite the LOAD helper?
+    Unpacker.cs            runs a packed program's unpacker in the 6502 emulator: the unpacked memory and a launcher
     SaveService.cs         SAVEs, written files and channel 15 commands: into a folder or disk image
   Pictures/
     KoalaConverter.cs      image -> multicolor bitmap (per-cell palette + dithering)

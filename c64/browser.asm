@@ -23,7 +23,7 @@
 ; whether something was pushed (make push or the web UI) and runs it.
 ;
 ; Memory map
-;   $0100-$01ab    starter: receives the end of a program over the browser, starts it
+;   $0100-$01c3    starter: receives the end of a program over the browser, starts it
 ;   $0200-$0258    request header and URL (BASIC input buffer, unused)
 ;   $02a7-$02f6    message line, folder ids of the menu entries (unused area)
 ;   $0334-$03ff    standalone SID player or LOAD helper (sent by the server)
@@ -752,11 +752,13 @@ st_helper:
     lda #>load_helper
     sta LOAD_VECTOR+1
 
-    ; the file helper (file $00), the LOAD guard ($01), the save helper ($02) and the LOAD module ($03): the LOAD
-    ; helper loads them from the server,
+    ; the modules (see st_module_names): the LOAD helper loads them from the server,
     ; which puts them where the program leaves room (or sends only an RTS to $03fc); their last 3 bytes
     ; are their entry
 st_module:
+    ldx st_module_index
+    lda st_module_names,x
+    sta st_module_name
     lda #1
     sta FILENAME_LENGTH
     sta SECONDARY                       ; to the address the server chose
@@ -769,6 +771,9 @@ st_module:
     lda #0
     jsr load_helper
     bcs st_next_module
+    ldx st_module_index                 ; the two parts of an unpacked program are only loaded
+    cpx #2
+    bcc st_next_module
     lda END_ADDRESS
     sec
     sbc #3
@@ -779,9 +784,9 @@ st_module:
 st_install:
     jsr $ffff
 st_next_module:
-    inc st_module_name
-    lda st_module_name
-    cmp #4
+    inc st_module_index
+    lda st_module_index
+    cmp #st_module_name - st_module_names
     bne st_module
 +   cli
     lda st_load+1
@@ -793,7 +798,12 @@ st_next_module:
 
 st_count:       !word 0
 st_load:        !word 0
-st_module_name: !byte 0                 ; "file name" of the file helper (0), LOAD guard (1), save helper (2), LOAD module (3)
+st_module_index: !byte 0
+; The modules' "file names", in the order they are fetched: a packed program unpacked by the server ($10 below the
+; I/O area, $11 above it), the file helper (0), LOAD guard (1), save helper (2), LOAD module (3), and the launcher
+; of an unpacked program ($12), which does not return
+st_module_names: !byte $10, $11, 0, 1, 2, 3, $12
+st_module_name: !byte 0
 }
 starter_end:
 !if starter_end - starter_image > 256 {
