@@ -78,13 +78,19 @@ function selectTab(section) {
     button.setAttribute('aria-selected', String(button.dataset.section === section)));
 
   const isActivity = section === 'activity';
-  $('#browser').classList.toggle('hidden', isActivity);
+  const isCsdb = section === 'csdb';
+  $('#browser').classList.toggle('hidden', isActivity || isCsdb);
   $('#activity').classList.toggle('hidden', !isActivity);
+  $('#csdb').classList.toggle('hidden', !isCsdb);
   closePreview();
 
   if (isActivity) {
     state.unseenActivity = 0;
     updateActivityBadge();
+    return;
+  }
+  if (isCsdb) {
+    $('#csdb-query').focus();
     return;
   }
 
@@ -346,6 +352,7 @@ async function refreshStatus() {
   }
 
   $('#content-folder').textContent = status.contentFolder;
+  document.querySelector('.tabs [data-section="csdb"]').classList.toggle('hidden', !status.csdb);
 
   const seen = status.c64LastSeen ? new Date(status.c64LastSeen) : null;
   const online = seen && Date.now() - seen.getTime() < 5000;
@@ -402,19 +409,60 @@ function updateActivityBadge() {
 }
 
 // ---------------------------------------------------------------------------
+// CSDb: search, and run a release on the C64
+
+async function searchCsdb(event) {
+  event.preventDefault();
+  const text = $('#csdb-query').value.trim();
+  if (!text) return;
+  $('#csdb-empty').textContent = 'SEARCHING...';
+  $('#csdb-empty').classList.remove('hidden');
+  $('#csdb-results').replaceChildren();
+  const data = await attempt(() => api('/api/csdb/search?' + query({ q: text })));
+  if (!data) {
+    $('#csdb-empty').textContent = 'CSDB CAN NOT BE REACHED.';
+    return;
+  }
+  $('#csdb-empty').textContent = 'NOTHING FOUND FOR THE C64.';
+  $('#csdb-empty').classList.toggle('hidden', data.results.length > 0);
+  $('#csdb-results').replaceChildren(...data.results.map(renderRelease));
+  if (data.results.length) toast(`${data.results.length} found; on the C64 in ${data.folder}`);
+}
+
+function renderRelease(release) {
+  const type = (release.type || '').replace(/^C64 /, '');
+  return element('tr', {},
+    element('td', {}, element('span', { class: 'kind program', title: release.type }, type.slice(0, 4).toUpperCase())),
+    element('td', { class: 'name' }, element('a', { href: release.url, target: '_blank', rel: 'noopener', title: 'This release on csdb.dk' }, release.name)),
+    element('td', { class: 'details' }, release.group || ''),
+    element('td', {}, element('div', { class: 'row-actions' },
+      element('button', { type: 'button', class: 'key small primary', title: 'Download it and run its first program on the C64', onclick: () => runRelease(release, false) }, 'RUN'),
+      element('button', { type: 'button', class: 'key small', title: 'Save its first program to disk (drive 8) on the C64, then run it', onclick: () => runRelease(release, true) }, 'SAVE+RUN'))));
+}
+
+async function runRelease(release, save) {
+  toast(`Downloading ${release.name}...`);
+  await attempt(
+    () => postJson('/api/csdb/run', { id: release.id, save }),
+    (result) => `${result.name} is waiting for the C64`);
+  refreshStatus();
+}
+
+// ---------------------------------------------------------------------------
 // Wiring
 
 document.querySelectorAll('.tabs button').forEach((button) =>
   button.addEventListener('click', () => selectTab(button.dataset.section)));
 
 $('#new-folder').addEventListener('click', newFolder);
+$('#csdb-search').addEventListener('submit', searchCsdb);
 $('#upload').addEventListener('change', (event) => { uploadFiles(event.target.files); event.target.value = ''; });
 $('#preview-close').addEventListener('click', closePreview);
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') closePreview();
 
-  // F1 / F3 / F5 / F7 switch sections, like in the browser on the C64
-  const section = { F1: 'prg', F3: 'img', F5: 'sid', F7: 'activity' }[event.key];
+  // F1 / F3 / F5 / F7 switch sections, like in the browser on the C64; F8 is CSDb
+  const section = { F1: 'prg', F3: 'img', F5: 'sid', F7: 'activity', F8: 'csdb' }[event.key];
   if (section && !document.querySelector('dialog[open]') && !event.metaKey && !event.ctrlKey && !event.altKey) {
     event.preventDefault();
     selectTab(section);

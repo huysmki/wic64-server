@@ -155,6 +155,14 @@ kbd {
 .toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; }
 
+.search { display: flex; gap: 10px; margin-bottom: 12px; }
+.search input {
+  flex: 1; min-width: 0; font: inherit; font-size: 22px; padding: 6px 10px; border: none; border-radius: 0;
+  background: var(--text); color: var(--screen); caret-color: var(--screen);
+}
+.search input::placeholder { color: var(--text-dim); }
+.hint a { color: var(--c64-cyan); }
+
 .breadcrumb { display: flex; flex-wrap: wrap; gap: 4px; list-style: none; margin: 0; padding: 0; font-size: 26px; }
 .breadcrumb li + li::before { content: "/"; margin-right: 4px; color: var(--text-dim); }
 .breadcrumb button { font: inherit; letter-spacing: 0; background: none; color: var(--c64-cyan); padding: 0 2px; text-decoration: underline; text-underline-offset: 4px; }
@@ -179,6 +187,8 @@ table.files { width: 100%; border-collapse: collapse; }
 .files tr:last-child td { border-bottom: none; }
 .files tbody tr:hover { background: var(--line); }
 .files .name { color: var(--c64-white); overflow-wrap: anywhere; }
+.files .name a { color: var(--c64-white); text-underline-offset: 4px; }
+.files .name a:hover { background: var(--c64-cyan); color: var(--screen); }
 .files .name button {
   font: inherit; letter-spacing: 0; padding: 0; background: none;
   color: var(--c64-cyan); text-align: left; text-decoration: underline; text-underline-offset: 4px;

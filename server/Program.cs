@@ -36,7 +36,8 @@ builder.Services
     .AddSingleton<DriveSession>()
     .AddSingleton<C64Endpoints>()
     .AddSingleton<DriveEndpoints>()
-    .AddSingleton<AdminEndpoints>();
+    .AddSingleton<AdminEndpoints>()
+    .AddSingleton<CsdbEndpoints>();
 
 var app = builder.Build();
 
@@ -50,6 +51,7 @@ app.UseStaticFiles(new StaticFileOptions
 app.Services.GetRequiredService<C64Endpoints>().Map(app);
 app.Services.GetRequiredService<DriveEndpoints>().Map(app);
 app.Services.GetRequiredService<AdminEndpoints>().Map(app);
+app.Services.GetRequiredService<CsdbEndpoints>().Map(app);
 
 if (Directory.Exists(options.ContentFolder))
 {

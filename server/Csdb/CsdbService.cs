@@ -8,11 +8,12 @@ using Wic64Server.Content;
 namespace Wic64Server.Csdb;
 
 /// <summary>A release on CSDb, as a list shows it.</summary>
-public sealed record Release(int Id, string Name, string? Group);
+public sealed record Release(int Id, string Name, string? Group, string? Type = null);
 
 /// <summary>
-/// CSDb (csdb.dk), the C64 scene database, as the folder "CSDb/" at the top of the programs: its latest releases and
-/// top lists. A release is downloaded the first time it is opened, a .zip unpacked, and kept in content/prg/.csdb.
+/// CSDb (csdb.dk), the C64 scene database, as the folder "CSDb/" at the top of the programs: its latest releases, top
+/// lists, and the last search from the web UI. A release is downloaded the first time it is opened, a .zip unpacked,
+/// and kept in content/prg/.csdb.
 /// From then on it is an ordinary folder: its programs and disk images run like any other.
 /// </summary>
 public sealed partial class CsdbService(ServerOptions options, ActivityLog activity, ILogger<CsdbService> log)
@@ -42,8 +43,25 @@ public sealed partial class CsdbService(ServerOptions options, ActivityLog activ
     readonly Dictionary<string, (DateTime Fetched, List<Release> Releases)> lists = new();
     readonly Dictionary<int, Release> known = new();
     readonly Lock downloadLock = new();
+    string? lastSearch;
 
     public bool Enabled => options.Csdb;
+
+    /// <summary>The folders in "CSDb/": the last search from the web UI first, then the lists.</summary>
+    public IReadOnlyList<(string Key, string Name)> Folders
+    {
+        get
+        {
+            var folders = Lists.Select(l => (l.Key, l.Name)).ToList();
+            lock (listLock)
+            {
+                if (lastSearch is not null)
+                    folders.Insert(0, ("search", $"Search: {lastSearch}"));
+            }
+
+            return folders;
+        }
+    }
 
     /// <summary>The cache: lists/{key} are the lists (not on disk), releases/{id} the downloaded releases.</summary>
     public string Root { get; } = Path.Combine(options.ContentFolder, "prg", ".csdb");
@@ -64,7 +82,7 @@ public sealed partial class CsdbService(ServerOptions options, ActivityLog activ
         if (path == Root)
             return "CSDb";
         if (ListKey(path) is { } key)
-            return "CSDb/" + Lists.FirstOrDefault(l => l.Key == key).Name;
+            return "CSDb/" + Folders.FirstOrDefault(l => l.Key == key).Name;
 
         return Release(path) is var (name, inside) ? "CSDb/" + name + (inside is null ? "" : "/" + inside) : null;
     }
@@ -93,9 +111,15 @@ public sealed partial class CsdbService(ServerOptions options, ActivityLog activ
     /// <summary>The name in the menu: "Next Level (Performers)".</summary>
     public static string MenuName(Release release) => release.Group is null ? release.Name : $"{release.Name} ({release.Group})";
 
-    /// <summary>The releases of a list, fetched from CSDb at most once an hour.</summary>
+    /// <summary>The releases of a list, fetched from CSDb at most once an hour; for "search" the last search.</summary>
     public IReadOnlyList<Release> Releases(string key)
     {
+        if (key == "search")
+        {
+            lock (listLock)
+                return lists.TryGetValue(key, out var found) ? found.Releases : [];
+        }
+
         var list = Lists.First(l => l.Key == key);
         lock (listLock)
         {
@@ -113,6 +137,77 @@ public sealed partial class CsdbService(ServerOptions options, ActivityLog activ
         }
 
         return releases;
+    }
+
+    /// <summary>
+    /// Searches CSDb's releases (only C64 releases, at most 100). The results also become the folder
+    /// "CSDb/Search: …" on the C64.
+    /// </summary>
+    public IReadOnlyList<Release> Search(string text)
+    {
+        text = text.Trim();
+        using var response = http.GetAsync($"{Site}/search/?seinsel=releases&search={Uri.EscapeDataString(text)}&Go.x=0&Go.y=0")
+            .GetAwaiter().GetResult();
+        response.EnsureSuccessStatusCode();
+        var html = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+
+        List<Release> releases;
+        if (ReleaseLink().Match(response.RequestMessage?.RequestUri?.ToString() ?? "") is { Success: true } single
+            && response.RequestMessage!.RequestUri!.AbsolutePath.StartsWith("/release"))
+        {
+            // One match: CSDb shows the release itself
+            var id = int.Parse(single.Groups[1].Value);
+            var xml = XDocument.Parse(Get($"{Site}/webservice/?type=release&id={id}"));
+            var release = xml.Descendants("Release").First();
+            var type = (string?)release.Element("Type");
+            var group = release.Element("ReleasedBy")?.Descendants("Name").FirstOrDefault()?.Value;
+            releases = type?.StartsWith("C64 ") == true ? [new Release(id, (string?)release.Element("Name") ?? id.ToString(), group, type)] : [];
+        }
+        else
+        {
+            releases = SearchResult().Matches(html)
+                .Select(m => new Release(
+                    int.Parse(m.Groups[1].Value),
+                    WebUtility.HtmlDecode(m.Groups[2].Value),
+                    m.Groups[4].Success ? ReleaseDate().Replace(WebUtility.HtmlDecode(Tag().Replace(m.Groups[4].Value, "").Split(',')[0]), "").Trim() : null,
+                    WebUtility.HtmlDecode(m.Groups[3].Value)))
+                .Where(r => r.Type!.StartsWith("C64 "))
+                .DistinctBy(r => r.Id)
+                .Take(TopListLength)
+                .ToList();
+        }
+
+        log.LogInformation("CSDb search \"{Text}\": {Count} C64 releases", text, releases.Count);
+        activity.Add("csdb", $"CSDb search \"{text}\": {releases.Count} release{(releases.Count == 1 ? "" : "s")}, on the C64 in CSDb/Search");
+        lock (listLock)
+        {
+            lastSearch = text;
+            lists["search"] = (DateTime.UtcNow, releases);
+            foreach (var release in releases)
+                known[release.Id] = release;
+        }
+
+        return releases;
+    }
+
+    /// <summary>
+    /// The program to start for a release: its first .prg, otherwise the first program on its first disk image.
+    /// Downloads the release first. Null when it has no program.
+    /// </summary>
+    public (byte[] Name, byte[] Program)? FirstProgram(int id)
+    {
+        var folder = Download(id);
+        if (Directory.EnumerateFiles(folder, "*.prg").Order(StringComparer.OrdinalIgnoreCase).FirstOrDefault() is { } prg)
+            return (Petscii.FileName(Path.GetFileName(prg)), File.ReadAllBytes(prg));
+
+        foreach (var imagePath in DiskImage.In(folder).Order(StringComparer.OrdinalIgnoreCase))
+        {
+            var image = DiskImage.Load(imagePath);
+            if (image.Programs().FirstOrDefault() is { } file)
+                return (file.Name, image.Read(file));
+        }
+
+        return null;
     }
 
     /// <summary>The RSS feed of the latest releases: only C64 releases (not "Other Platform C64 Tool").</summary>
@@ -261,4 +356,12 @@ public sealed partial class CsdbService(ServerOptions options, ActivityLog activ
 
     [GeneratedRegex("<[^>]*>")]
     private static partial Regex Tag();
+
+    // the release date behind the group in search results: "Macc (18/11-2026)"
+    [GeneratedRegex(@"\s*\(\d{1,2}/\d{1,2}-\d{4}\)\s*$|\s*\(\d{4}\)\s*$")]
+    private static partial Regex ReleaseDate();
+
+    // <a href="/release/?id=214862">Last Ninja</a> (C64 One-File Demo) by  <a ...>Finnish Ice-Breakers (FIB)</a><br>
+    [GeneratedRegex(@"<a href=""/release/\?id=(\d+)"">([^<]*)</a> \(([^)]*)\)(?: by\s+(.*?))?<br>")]
+    private static partial Regex SearchResult();
 }

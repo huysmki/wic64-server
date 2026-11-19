@@ -32,6 +32,7 @@
       <button role="tab" data-section="img"><kbd>F3</kbd> PICTURES</button>
       <button role="tab" data-section="sid"><kbd>F5</kbd> MUSIC</button>
       <button role="tab" data-section="activity"><kbd>F7</kbd> ACTIVITY <span class="badge hidden" id="activity-badge"></span></button>
+      <button role="tab" data-section="csdb"><kbd>F8</kbd> CSDB</button>
     </nav>
 
     <main>
@@ -64,6 +65,28 @@
           <div class="drop-hint">DROP FILES TO UPLOAD</div>
         </div>
         <p class="hint" id="section-hint"></p>
+      </section>
+
+      <section id="csdb" class="hidden">
+        <form class="search" id="csdb-search">
+          <input type="search" id="csdb-query" placeholder="SEARCH CSDB, E.G. LAST NINJA" autocomplete="off" spellcheck="false" required>
+          <button type="submit" class="key primary">SEARCH</button>
+        </form>
+        <div class="dropzone">
+          <table class="files">
+            <thead>
+              <tr>
+                <th class="col-kind">TYPE</th>
+                <th>NAME</th>
+                <th class="col-details">BY</th>
+                <th class="col-actions"></th>
+              </tr>
+            </thead>
+            <tbody id="csdb-results"></tbody>
+          </table>
+          <p class="empty" id="csdb-empty">SEARCH FOR A DEMO, GAME OR GROUP.</p>
+        </div>
+        <p class="hint">Searches the C64 releases on <a href="https://csdb.dk" target="_blank" rel="noopener">CSDb</a>. The results are also on the C64: Programs, CSDb/Search. RUN downloads a release and pushes its first program to the C64. Disk demos with their own loader need a real drive: write their disk images to a floppy with the Disk tools.</p>
       </section>
 
       <section id="activity" class="hidden">

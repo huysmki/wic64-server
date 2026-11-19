@@ -50,7 +50,7 @@ public sealed class Catalog(ServerOptions options, CsdbService csdb)
         {
             if (folder.Path == csdb.Root)
             {
-                return CsdbService.Lists
+                return csdb.Folders
                     .Select(list => (Entry)new FolderEntry(list.Name + "/", IdOf(section, csdb.ListPath(list.Key), folderId, false)))
                     .ToList();
             }

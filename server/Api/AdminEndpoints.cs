@@ -50,6 +50,7 @@ public sealed class AdminEndpoints(
             pushed = pushQueue.Peek() is { } p ? new { name = p.Title, kind = p.What.ToString().ToLowerInvariant(), save = p.Save, run = p.Run } : null,
             contentFolder = catalog.Root,
             songLengths = songLengths.DatabaseFile,
+            csdb = options.Csdb,
         });
 
         api.MapGet("/activity", (long? since) => activity.Since(since ?? 0));
