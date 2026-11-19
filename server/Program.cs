@@ -2,6 +2,7 @@ using Wic64Server;
 using Wic64Server.Activity;
 using Wic64Server.Api;
 using Wic64Server.Content;
+using Wic64Server.Csdb;
 using Wic64Server.Music;
 using Wic64Server.Pictures;
 using Wic64Server.Programs;
@@ -22,6 +23,7 @@ builder.WebHost.UseUrls($"http://0.0.0.0:{options.Port}");
 
 builder.Services
     .AddSingleton(options)
+    .AddSingleton<CsdbService>()
     .AddSingleton<Catalog>()
     .AddSingleton<ActivityLog>()
     .AddSingleton<PushQueue>()

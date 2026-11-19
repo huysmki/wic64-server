@@ -50,6 +50,7 @@ screen data, drawn with the C64's character set, colors and border.
 - [The web UI](#the-web-ui)
 - [Pushing programs from the computer](#pushing-programs-from-the-computer)
 - [Programs, disk images and the LOAD helper](#programs-disk-images-and-the-load-helper)
+- [CSDb](#csdb)
 - [Plugins and the Disk tools](#plugins-and-the-disk-tools)
 - [Music](#music)
 - [Pictures](#pictures)
@@ -66,14 +67,17 @@ screen data, drawn with the C64's character set, colors and border.
 **On the C64**
 
 - **Programs:** run `.prg` files from the computer, loaded to their own address anywhere in `$0800-$cfff`.
-- **Disk images:** open `.d64` images like folders and run the programs on them. Games with their own fast loader
+- **CSDb:** the latest releases and the top demos, one-file demos, intros, games and tools from
+  [CSDb](https://csdb.dk), right in the menu. A release downloads when you open it.
+- **Disk images:** open `.d64`, `.d71` and `.d81` images like folders and run the programs on them. Games with their own fast loader
   (most original commercial disks) don't work this way; see [Games with a fast loader](#games-with-a-fast-loader).
 - **Multi-file programs:** a LOAD helper lets running programs `LOAD` more files from the server, including from
   the B side of a game, with the real drive as fallback.
 - **SAVE to the computer:** programs that `SAVE` (high scores, saved games, BASIC you write on the C64) save into
   the folder or disk image they came from, like on a real drive.
-- **SEQ files:** on disks with SEQ or USR files, a file helper lets programs read them with `OPEN`/`INPUT#`/`GET#`,
-  when the disk's programs leave room for it.
+- **SEQ files and the command channel:** a file helper lets programs read and write SEQ files with
+  `OPEN`/`INPUT#`/`GET#`/`PRINT#`, and use channel 15 (scratch, rename, drive status), when the disk's programs leave
+  room for it.
 - **Save to disk:** SHIFT+letter saves any program (also from inside a `.d64`) to drive 8, e.g. an SD2IEC.
 - **From the C64's disk to the computer:** the Disk tools plugin uploads files from drive 8–11, or backs up a whole
   disk as a `.d64`. On an SD2IEC it also browses folders and disk images and uploads the image files themselves.
@@ -344,18 +348,33 @@ more files, the menu shows **"! Overwrites the LOAD helper: may hang"** above th
 when you start one. The server finds this by scanning the programs' code, so it is a strong hint, not a certainty.
 Such disks need a real drive or an SD2IEC; CD64 is an example.
 
-**SEQ files and the file helper.** Programs read data files (SEQ, USR, also PRG) with `OPEN`, `INPUT#`/`GET#` and
-`CLOSE`, e.g. `OPEN 2,8,2,"SCORES,S,R"`. On a disk image (or folder with `.seq`/`.usr` files) that has such files,
-programs get a second helper (`c64/filehelper.asm`, 3 pages) that reads them from the server:
+**SEQ files, the command channel and the file helper.** Programs use data files (SEQ, USR, also PRG) with `OPEN`,
+`INPUT#`/`GET#`/`PRINT#` and `CLOSE`, and the drive's command channel 15. Programs on a disk image or folder with
+SEQ or USR files, and programs that `OPEN` files (the BASIC keyword or a call of the KERNAL's OPEN; on a disk image:
+any of its programs), get a second helper (`c64/filehelper.asm`, 7 pages) that does this on the server:
 
-- The server looks for 3 pages that none of the disk's programs load into or address: in `$c000-$cfff` if possible,
+```basic
+OPEN 2,8,2,"SCORES,S,R" : INPUT#2,A$ : CLOSE 2          : REM read
+OPEN 2,8,2,"SCORES,S,W" : PRINT#2,A$ : CLOSE 2          : REM write (",A" appends)
+OPEN 15,8,15,"S0:SCORES" : INPUT#15,E,E$,T,S : CLOSE 15 : REM a command, then the drive status
+```
+
+- **Reading:** from the same image or folder; `OPEN "$"` gives the directory.
+- **Writing:** the bytes go to the server 64 at a time; at `CLOSE` it writes the file into the folder (`name.seq`)
+  or the disk image, replacing a file with the same name. `",A"` appends, `",P,W"` and `",U,W"` write PRG and USR
+  files.
+- **Channel 15:** `S` scratches files (wildcards work), `R` renames (`R0:NEW=OLD`); `I`, `V` and `UI` only answer.
+  `INPUT#15` gives the drive status (`00, OK,00,00`, `01, FILES SCRATCHED,01,00`, `62,FILE NOT FOUND,00,00`, …).
+  `N` (format) is refused with `26,WRITE PROTECT ON`; other commands (block and memory commands) answer
+  `31,SYNTAX ERROR`. Files scratched in a folder go to its hidden `.scratched` folder, not the trash.
+- One file at a time, plus channel 15. The save channel (secondary address 1), REL files and files the server doesn't
+  have to read go to the real drive.
+- The server looks for 7 pages that none of the disk's programs load into or address: in `$c000-$cfff` if possible,
   otherwise as high as possible below `$a000`, and then lowers the top of BASIC memory so BASIC stays below it.
   When there is no room (the programs use all memory), there is no file helper and the activity log says so.
-- It only reads, one file at a time, from the same image or folder. `OPEN "$"` gives the directory. Writing, the
-  command channel (15), REL files and files the server doesn't have go to the real drive.
-- It hooks the KERNAL (`OPEN`, `CHKIN`, `CHRIN`, `GETIN`, `CLOSE`, `CLRCHN`, `CLALL`), so it works for programs
-  that read files through the KERNAL, like most BASIC programs and many tools, not for ones that talk to the drive
-  directly.
+- It hooks the KERNAL (`OPEN`, `CHKIN`, `CHKOUT`, `CHRIN`, `CHROUT`, `GETIN`, `CLOSE`, `CLRCHN`, `CLALL`), so it
+  works for programs that use files through the KERNAL, like most BASIC programs and many tools, not for ones that
+  talk to the drive directly.
 
 **BASIC programs with INPUT and the LOAD guard.** The LOAD helper keeps its request (the URL up to the file name) in
 `$0200`, the BASIC input buffer, and BASIC's `INPUT` and `INPUT#` overwrite it. For BASIC programs that use `INPUT`
@@ -370,12 +389,10 @@ sends the memory to the server with the WiC64's HTTP POST, in parts of up to 32 
 
 - **Into a folder:** as `name.prg`. **Into a `.d64`, `.d71` or `.d81`:** as a PRG file in the image, with its
   directory entry and the BAM updated, like a real drive writes it. The activity log shows each SAVE.
-- A file with the same name is replaced (with or without `@0:`): games often delete the old file through the
-  command channel first, which doesn't reach the server.
+- A file with the same name is replaced (with or without `@0:`), like after a scratch on channel 15.
 - **Backups:** before the server first saves into a disk image, it copies the original to a hidden `.backups` folder
   next to it (e.g. `content/prg/.backups/game.d64`). Delete that copy to make a new one at the next save.
 - When the server can't save the file (disk full, a wildcard in the name), the SAVE goes to the real drive.
-- Saving SEQ files (`OPEN …,S,W`) and commands on channel 15 (like scratching a file) aren't supported yet.
 
 ### Games with a fast loader
 
@@ -392,6 +409,10 @@ Typical signs:
 - The first file starts and then hangs, or shows "loading" forever.
 - The activity log in the web UI shows one or two LOADs, then nothing more.
 
+**The menu warns for such disks:** **"! Own loader: write it to a real disk"** above the list. The server sees it from
+blocks the disk uses outside its files (more than 16), or from a program that sends code into the drive (`M-W`,
+`M-E`). Trackmo demos and many original games show it.
+
 What works for these games:
 
 - **Drive emulation:** a 1541 Ultimate, Ultimate 64, Kung Fu Flash or Pi1541 emulates a complete 1541 including its
@@ -402,6 +423,29 @@ What works for these games:
   loads fine through the browser.
 
 The server's activity log shows every LOAD, which makes it easy to see where a game takes over with its own loader.
+
+## CSDb
+
+The folder **`CSDb/`** at the top of the Programs menu brings [CSDb](https://csdb.dk), the C64 scene database, to
+the C64:
+
+| Folder | What's in it |
+|--------|--------------|
+| Latest releases | CSDb's latest C64 releases (its RSS feed) |
+| Top demos, Top one-file demos, Top intros, Top games, Top tools | the first 100 of CSDb's top list for that type |
+
+- The lists show each release as "Name (Group)". They're fetched from CSDb when you open them, at most once an hour.
+- **Opening a release** downloads it from CSDb (a few seconds; the activity log shows it), unpacks a `.zip`, and
+  shows its programs and disk images. From then on it's an ordinary folder: run, save to disk, LOAD, SEQ files and
+  SAVE all work as with your own files.
+- Downloads are kept in `content/prg/.csdb`, a hidden folder, so a release only downloads once. Delete that folder
+  to clear the cache.
+- **What runs:** one-file demos, intros, cracked games and tools work best. Most full-disk demos use their own
+  loader (Spindle, Sparkle, Bitfire, Krill's), which runs inside a real 1541 and doesn't work through the browser, nor
+  on an SD2IEC; the menu shows "! Own loader" for those disks. To run one, write its disk images to floppies with the
+  Disk tools (F7 in the plugin): downloaded CSDb releases are in its list, by disk name with the release's name next
+  to it.
+- Turn it off with `"Csdb": false` in `server/appsettings.json`, e.g. without an internet connection.
 
 ## Plugins and the Disk tools
 
@@ -528,7 +572,8 @@ A 5120×2880 JPG converts in about a second. The C64 receives 10 KB of Koala dat
   "Port": 6464,
   "SidDefaultSeconds": 180,      // play length of tunes that are not in Songlengths.md5
   "AllowRemoteAdmin": false,     // allow the web UI from other computers
-  "UploadFolder": ""             // Disk tools uploads; empty: content/prg/From C64
+  "UploadFolder": "",            // Disk tools uploads; empty: content/prg/From C64
+  "Csdb": true                   // the folder CSDb/ in the programs (needs internet)
 }
 ```
 
@@ -572,7 +617,9 @@ Most responses start with a status byte: `$00` = OK, followed by the payload; `$
 | `/x/p`, `/x/i`, `/x/s` | the pushed program, picture or tune, in the same format as `/p`, `/i` and `/s` |
 | `/h` | LOAD helper code for `$02a7` and `$0334` |
 | `/l/{folder}/{name in hex}` | a file for the LOAD helper, or only status `$01` (then the real drive is used); name `00`: the file helper, `01`: the LOAD guard, `02`: the save helper, relocated, or only an RTS at `$03fc` |
-| `/f/{folder}/{chunk}/{name in hex}` | 64 bytes of a file the file helper OPENs, after a byte 1 for the last chunk (else 0); or only status `$01` |
+| `/f/{folder}/{chunk}/{name in hex}` | 64 bytes of a file the file helper OPENs, after a byte 1 for the last chunk (else 0); only `$02` when opened for writing; or only status `$01` |
+| `POST /a/{folder}/{part}/{name in hex}` | up to 64 bytes the file helper writes (part: bit 15 on the last one, at CLOSE; then also as GET without data) -> `$00`, or `$01` + message |
+| `/c/{folder}/{command in hex}` | a command on channel 15 -> `$00` and the drive status, e.g. `00, OK,00,00` |
 | `POST /w/{folder}/{start}/{part}/{name in hex}` | SAVE from the save helper: up to 32 KB of memory from `start` (part: bit 7 on the last one) -> `$00`, or `$01` + message |
 | `/o` | the WiC64 portal, fetched from x.wic64.net (keeps the browser small) |
 | `/browser.prg` | the browser itself |
@@ -596,7 +643,7 @@ Most responses start with a status byte: `$00` = OK, followed by the payload; `$
 | `$0200-$0258` | WiC64 request header and URL (BASIC input buffer); used by the LOAD helper too |
 | `$02a7-$02ff` | Message line and folder ids; part of the LOAD helper while a program runs |
 | `$0334-$03fb` | Standalone SID player or LOAD helper (both sent by the server) |
-| (free pages) | File helper (3 pages, disks with SEQ files), LOAD guard (1 page, BASIC with INPUT and LOAD) and save helper (3 pages, programs that SAVE) while a program runs; placed by the server |
+| (free pages) | File helper (7 pages, disks with SEQ files and programs that OPEN), LOAD guard (1 page, BASIC with INPUT and LOAD) and save helper (3 pages, programs that SAVE) while a program runs; placed by the server |
 | `$0400-$07e7` | Menu screen (row 24 = status line) |
 | `$0800-$bfff` | Free for tunes playing in the background |
 | `$0800-$cfff` | Programs are received to their load address |
@@ -617,7 +664,7 @@ c64/
   browser.asm              the C64 browser (ACME)
   standalone.asm           SID player for tunes that need the browser's memory
   loadhelper.asm           LOAD from device 8 via the server, for multi-file programs
-  filehelper.asm           OPEN and read SEQ files from device 8 via the server (relocatable)
+  filehelper.asm           OPEN, read and write files and channel 15 on device 8 via the server (relocatable)
   loadguard.asm            keeps the LOAD helper's request safe from BASIC's INPUT (relocatable)
   savehelper.asm           SAVE to device 8 via the server (relocatable)
   plugins/disk-tools.asm   plugin: upload files and whole disks from drive 8 to the computer
@@ -633,17 +680,20 @@ server/                    ASP.NET Core minimal API (.NET 10)
     AdminEndpoints.cs      JSON API for the web UI
     AccessRules.cs         web UI only from this computer; tracks when the C64 was last seen
     DriveEndpoints.cs      requests of the Disk tools plugin (WiC64 HTTP POST)
+  Csdb/
+    CsdbService.cs         CSDb's latest releases and top lists, downloads and unpacks releases
   Content/
     Catalog.cs             folders and .d64 images as menu entries, folder ids
     DiskImage.cs           .d64/.d71/.d81 reader
-    DiskImageWriter.cs     writes a PRG file into a .d64/.d71/.d81: BAM, directory, data blocks
+    DiskImageWriter.cs     writes, scratches and renames files in a .d64/.d71/.d81: BAM, directory, data blocks
+    CbmFileName.cs         file names by CBM DOS rules: "@0:NAME,S,W", wildcards
     Petscii.cs             PETSCII file names
   Programs/
     PushQueue.cs           what was pushed: a program, picture or tune
     Plugins.cs             fills in the server address in plugins
     LoadService.cs         files and directory listings for the LOAD and file helper
     MemoryScan.cs          which memory a disk's programs use; do they overwrite the LOAD helper?
-    SaveService.cs         SAVEs from the save helper: into a folder or disk image
+    SaveService.cs         SAVEs, written files and channel 15 commands: into a folder or disk image
   Pictures/
     KoalaConverter.cs      image -> multicolor bitmap (per-cell palette + dithering)
     PictureService.cs      picture cache and PNG previews
@@ -691,8 +741,8 @@ build/                     generated by make (browser.prg, standalone.bin, loadh
   point.
 - **No drive emulation:** games with their own fast loader (most original commercial disks) don't run from a `.d64`;
   only files loaded through the KERNAL are served. See [Games with a fast loader](#games-with-a-fast-loader).
-- **Disk formats:** REL files, writing SEQ files, `.d81` partitions and `.t64` are not supported yet. SEQ files can
-  only be read when the file helper fits, and SAVE only works when the save helper fits (see
+- **Disk formats:** REL files, `.d81` partitions and `.t64` are not supported yet. SEQ files and channel 15 only
+  work when the file helper fits, and SAVE only when the save helper fits (see
   [Programs, disk images and the LOAD helper](#programs-disk-images-and-the-load-helper)).
 - **LOAD helper memory:** the helper lives in `$0200-$0258`, `$02a7-$02ff` and `$0334-$03fb`. Programs that use that
   memory overwrite it, and their LOADs then go to the real drive or hang; the menu warns for such disk images.
@@ -710,10 +760,10 @@ build/                     generated by make (browser.prg, standalone.bin, loadh
 ## Ideas for later
 
 - **Modular browser:** features loaded from the server on demand, so the C64 side can keep growing.
-- **Disk images:** `.t64`, REL files, writing SEQ files, and the command channel (scratch, rename).
+- **Disk images:** `.t64`, REL files, and copying files (`C`) on the command channel.
 - **Faster disk writing:** a small fast writer in the 1541's own memory (`M-W`/`M-E`) that receives a track with a
   fast transfer and writes it in one revolution.
-- **Search:** type a few letters to find a tune in the full High Voltage SID Collection.
+- **Search:** type a few letters to find a tune in the full High Voltage SID Collection, or a release on CSDb.
 - **Playlists:** jukebox and slideshow modes (pictures cycling while music plays).
 - **Computer dashboard:** clock, calendar, now playing on Spotify/Music, with remote control from the C64.
 - **Online content:** weather, news and RSS rendered as 40-column pages; an AI chat on the C64.

@@ -37,6 +37,12 @@ public sealed class MemoryScan
     /// <summary>A program calls the KERNAL SAVE ($ffd8 or $f5dd).</summary>
     public bool SavesFiles { get; private set; }
 
+    /// <summary>A program calls the KERNAL OPEN ($ffc0 or $f34a).</summary>
+    public bool OpensFiles { get; private set; }
+
+    /// <summary>A program sends code into the drive ("M-W", "M-E"): its own loader, which needs a real drive.</summary>
+    public bool SendsDriveCode { get; private set; }
+
     /// <summary>Programs that LOAD more files and overwrite the LOAD helper: loading may hang.</summary>
     public bool HelperAtRisk => LoadsFiles && OverwriteHelper.Count > 0;
 
@@ -52,6 +58,8 @@ public sealed class MemoryScan
             used[page] = true;
 
         var overwrites = load <= 0x03fb && end > 0x02a7;
+        if (prg.AsSpan().IndexOf("M-W"u8) >= 0 || prg.AsSpan().IndexOf("M-E"u8) >= 0)
+            SendsDriveCode = true;
         for (var i = 2; i + 2 < prg.Length; i++)
         {
             if (!AddressOpcodes.Contains(prg[i]))
@@ -63,6 +71,8 @@ public sealed class MemoryScan
                 LoadsFiles = true;
             if (prg[i] is 0x20 or 0x4c && address is 0xffd8 or 0xf5dd)
                 SavesFiles = true;
+            if (prg[i] is 0x20 or 0x4c && address is 0xffc0 or 0xf34a)
+                OpensFiles = true;
             if (WriteOpcodes.Contains(prg[i]) && HelperAreas.Any(area => address >= area.From && address <= area.To))
                 overwrites = true;
         }
@@ -78,7 +88,7 @@ public sealed class MemoryScan
             used[page] = true;
     }
 
-    public const byte TokenInputFile = 0x84, TokenInput = 0x85, TokenLoad = 0x93, TokenSave = 0x94;
+    public const byte TokenInputFile = 0x84, TokenInput = 0x85, TokenLoad = 0x93, TokenSave = 0x94, TokenOpen = 0x9f;
     const byte TokenRem = 0x8f;
 
     /// <summary>A BASIC program: loaded at $0801, starting with a valid line link.</summary>

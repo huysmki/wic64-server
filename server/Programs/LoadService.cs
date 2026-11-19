@@ -19,7 +19,7 @@ public sealed class LoadService(Catalog catalog, ServerOptions options, Activity
     /// <summary>What the starter gets when there is no file helper or LOAD guard: an RTS at $03fc, its "entry".</summary>
     static readonly byte[] NoModule = [0xfc, 0x03, 0x60, 0x00, 0x00];
 
-    static readonly string[] FolderFileExtensions = [".prg", ".seq", ".usr"];
+    public static readonly string[] FolderFileExtensions = [".prg", ".seq", ".usr"];
 
     readonly Lock startedLock = new();
     (string Name, byte[] Program)? started;
@@ -71,7 +71,8 @@ public sealed class LoadService(Catalog catalog, ServerOptions options, Activity
 
     /// <summary>
     /// The file helper as a .prg, for the starter (file name $00 from the LOAD helper): relocated to free pages when
-    /// the disk has SEQ or USR files, otherwise only an RTS. Only this disk counts, not the other images next to it:
+    /// the disk has SEQ or USR files or its programs OPEN files (the BASIC keyword or a call of the KERNAL's OPEN),
+    /// otherwise only an RTS. Only this disk counts, not the other images next to it:
     /// those are often unrelated.
     /// </summary>
     public byte[] FileHelper(int folder)
@@ -84,19 +85,21 @@ public sealed class LoadService(Catalog catalog, ServerOptions options, Activity
             ? DiskImage.Load(path).Files().Any(f => f.Type != FileType.Prg)
             : System.IO.Directory.Exists(path) && System.IO.Directory.EnumerateFiles(path)
                 .Any(f => Path.GetExtension(f).ToLowerInvariant() is ".seq" or ".usr");
-        if (!hasDataFiles)
+        var (programs, startedProgram) = ProgramsAndStarted(path, isDiskImage);
+        var opensFiles = (isDiskImage ? programs.Select(p => p.Program) : startedProgram is null ? [] : [startedProgram])
+            .Any(program => MemoryScan.BasicTokens(program).Contains(MemoryScan.TokenOpen) || Scan([("", program)]).OpensFiles);
+        if (!hasDataFiles && !opensFiles)
             return NoModule;
 
-        var (programs, _) = ProgramsAndStarted(path, isDiskImage);
         if (Relocate("filehelper", ScanBesidesPlaced(programs)) is not { } relocated)
         {
             logger.LogInformation("No free memory for the file helper in {Folder}", path);
-            activity.Add("load", "No free memory for the file helper: the program can't read SEQ files from the server");
+            activity.Add("load", "No free memory for the file helper: OPEN goes to the real drive");
             return NoModule;
         }
 
         var (module, place) = relocated;
-        activity.Add("load", $"File helper for SEQ files at {Range(place)}");
+        activity.Add("load", $"File helper (OPEN, SEQ files, channel 15) at {Range(place)}");
         return module;
     }
 
@@ -222,16 +225,26 @@ public sealed class LoadService(Catalog catalog, ServerOptions options, Activity
         return File.Exists(path) ? File.ReadAllBytes(path) : throw new FileNotFoundException($"{name} missing, run make", path);
     }
 
+    /// <summary>Blocks outside any file above which a disk needs its own loader (and so a real drive).</summary>
+    const int OwnLoaderBlocks = 16;
+
     /// <summary>
-    /// A warning for the menu of a disk image whose programs LOAD more files but overwrite the LOAD helper: loading
-    /// then hangs. Only for disk images, where the programs belong together; not for folders of unrelated programs.
+    /// A warning for the menu of a disk image: it has its own loader (trackmo demos, original games), seen from data
+    /// outside its files or code sent into the drive, so it needs a real drive; or its programs LOAD more files but
+    /// overwrite the LOAD helper, so
+    /// loading hangs. Only for disk images, where the programs belong together; not for folders of unrelated programs.
     /// </summary>
     public string? Warning(int folder)
     {
         try
         {
             var (path, isDiskImage) = catalog.PathOf(Section.Programs, folder);
-            return isDiskImage && Scan(Programs(path, isDiskImage)).HelperAtRisk ? "! Overwrites the LOAD helper: may hang" : null;
+            if (!isDiskImage)
+                return null;
+            var scan = Scan(Programs(path, isDiskImage));
+            if (scan.SendsDriveCode || DiskImage.Load(path).HiddenBlocks() > OwnLoaderBlocks)
+                return "! Own loader: write it to a real disk";
+            return scan.HelperAtRisk ? "! Overwrites the LOAD helper: may hang" : null;
         }
         catch (Exception e)
         {
@@ -310,20 +323,20 @@ public sealed class LoadService(Catalog catalog, ServerOptions options, Activity
             return Directory(path, isDiskImage);
         }
 
-        if (ParseOpenName(petsciiName) is not { } parsed)
+        if (CbmFileName.Parse(petsciiName) is not { Mode: 'R' } parsed)
         {
             activity.Add("load", $"OPEN \"{text}\": not for reading, the C64 tries its own drive");
             return null;
         }
 
-        var (name, type) = parsed;
+        var (name, type) = (parsed.Name, parsed.Type);
 
         if (isDiskImage)
         {
             foreach (var imagePath in ImagesFrom(path))
             {
                 var image = DiskImage.Load(imagePath);
-                if (image.Files().FirstOrDefault(f => (type is null || f.Type == type) && Matches(name, f.Name)) is { } found)
+                if (image.Files().FirstOrDefault(f => (type is null || f.Type == type) && CbmFileName.Matches(name, f.Name)) is { } found)
                 {
                     activity.Add("load", $"OPEN \"{text}\" from {Path.GetFileName(imagePath)}");
                     return image.Read(found);
@@ -336,7 +349,7 @@ public sealed class LoadService(Catalog catalog, ServerOptions options, Activity
                 .Where(f => FolderFileExtensions.Contains(Path.GetExtension(f).ToLowerInvariant()))
                 .Where(f => type is null || TypeOf(f) == type)
                 .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
-                .FirstOrDefault(f => Matches(name, Petscii.FileName(Path.GetFileName(f))));
+                .FirstOrDefault(f => CbmFileName.Matches(name, Petscii.FileName(Path.GetFileName(f))));
             if (file is not null)
             {
                 activity.Add("load", $"OPEN \"{text}\" from {Path.GetFileName(file)}");
@@ -348,52 +361,12 @@ public sealed class LoadService(Catalog catalog, ServerOptions options, Activity
         return null;
     }
 
-    static FileType TypeOf(string file) => Path.GetExtension(file).ToLowerInvariant() switch
+    public static FileType TypeOf(string file) => Path.GetExtension(file).ToLowerInvariant() switch
     {
         ".seq" => FileType.Seq,
         ".usr" => FileType.Usr,
         _ => FileType.Prg,
     };
-
-    /// <summary>"0:NAME,S,R" → NAME and SEQ; null for writing (",W", ",A", "@0:"), REL files (",L") and channels ("#").</summary>
-    static (byte[] Name, FileType? Type)? ParseOpenName(byte[] petsciiName)
-    {
-        var parts = Split(petsciiName, (byte)',');
-        var name = StripDrive(parts[0]);
-        if (name.Length == 0 || petsciiName[0] is (byte)'@' or (byte)'#')
-            return null;
-
-        FileType? type = null;
-        foreach (var part in parts.Skip(1))
-        {
-            switch (part is [] ? (byte)0 : part[0])
-            {
-                case (byte)'S': type = FileType.Seq; break;
-                case (byte)'P': type = FileType.Prg; break;
-                case (byte)'U': type = FileType.Usr; break;
-                case (byte)'R' or 0: break;
-                default: return null;
-            }
-        }
-
-        return (name, type);
-    }
-
-    static List<byte[]> Split(byte[] bytes, byte separator)
-    {
-        var parts = new List<byte[]>();
-        var start = 0;
-        for (var i = 0; i <= bytes.Length; i++)
-        {
-            if (i == bytes.Length || bytes[i] == separator)
-            {
-                parts.Add(bytes[start..i]);
-                start = i + 1;
-            }
-        }
-
-        return parts;
-    }
 
     /// <summary>The .prg file for a LOAD, or null when the server does not have it.</summary>
     public byte[]? Load(int folder, byte[] petsciiName)
@@ -420,7 +393,7 @@ public sealed class LoadService(Catalog catalog, ServerOptions options, Activity
             foreach (var imagePath in ImagesFrom(path))
             {
                 var image = DiskImage.Load(imagePath);
-                if (image.Programs().FirstOrDefault(file => Matches(name, file.Name)) is { } found)
+                if (image.Programs().FirstOrDefault(file => CbmFileName.Matches(name, file.Name)) is { } found)
                 {
                     logger.LogInformation("LOAD \"{Name}\" from {Image}", Petscii.ToText(name), Path.GetFileName(imagePath));
                     activity.Add("load", $"LOAD \"{Petscii.ToText(name)}\" from {Path.GetFileName(imagePath)}");
@@ -432,7 +405,7 @@ public sealed class LoadService(Catalog catalog, ServerOptions options, Activity
         {
             var file = System.IO.Directory.EnumerateFiles(path, "*.prg")
                 .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
-                .FirstOrDefault(f => Matches(name, Petscii.FileName(Path.GetFileName(f))));
+                .FirstOrDefault(f => CbmFileName.Matches(name, Petscii.FileName(Path.GetFileName(f))));
             if (file is not null)
             {
                 logger.LogInformation("LOAD \"{Name}\" from {File}", Petscii.ToText(name), Path.GetFileName(file));
@@ -451,20 +424,6 @@ public sealed class LoadService(Catalog catalog, ServerOptions options, Activity
     {
         var colon = Array.IndexOf(name, (byte)':');
         return colon is 0 or 1 ? name[(colon + 1)..] : name;
-    }
-
-    /// <summary>CBM DOS wildcards: * matches the rest of the name, ? any single character.</summary>
-    static bool Matches(byte[] pattern, byte[] name)
-    {
-        for (var i = 0; i < pattern.Length; i++)
-        {
-            if (pattern[i] == '*')
-                return true;
-            if (i >= name.Length || (pattern[i] != '?' && pattern[i] != name[i]))
-                return false;
-        }
-
-        return pattern.Length == name.Length;
     }
 
     /// <summary>LOAD"$",8: the directory as a BASIC program, like a real drive sends it.</summary>

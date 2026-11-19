@@ -10,13 +10,15 @@ namespace Wic64Server;
 /// <param name="SidDefaultLength">Song length for tunes that are not in Songlengths.md5.</param>
 /// <param name="AllowRemoteAdmin">Allow the web UI from other computers, not only from this computer.</param>
 /// <param name="UploadFolder">Where the Disk tools plugin stores files and disks from the C64's drive 8.</param>
+/// <param name="Csdb">Show CSDb's latest releases and top lists as the folder "CSDb/" in the programs.</param>
 public sealed record ServerOptions(
     int Port,
     string ContentFolder,
     string BuildFolder,
     TimeSpan SidDefaultLength,
     bool AllowRemoteAdmin,
-    string UploadFolder)
+    string UploadFolder,
+    bool Csdb)
 {
     public static ServerOptions From(IConfiguration configuration)
     {
@@ -31,7 +33,8 @@ public sealed record ServerOptions(
             Folder("Build", "build"),
             TimeSpan.FromSeconds(configuration.GetValue("SidDefaultSeconds", 180)),
             configuration.GetValue<bool>("AllowRemoteAdmin"),
-            Folder("UploadFolder", Path.Combine(content, "prg", "From C64")));
+            Folder("UploadFolder", Path.Combine(content, "prg", "From C64")),
+            configuration.GetValue("Csdb", true));
     }
 
     /// <summary>

@@ -1,3 +1,5 @@
+using Wic64Server.Csdb;
+
 namespace Wic64Server.Content;
 
 public enum Section { Programs, Pictures, Music }
@@ -15,7 +17,7 @@ public sealed record DiskEntry(string Name, string ImagePath, DiskFile File) : E
 /// The files the C64 can browse, read from content/prg, content/img and content/sid.
 /// Folders get a numeric id the C64 uses in its requests; id 0 is the root of a section.
 /// </summary>
-public sealed class Catalog(ServerOptions options)
+public sealed class Catalog(ServerOptions options, CsdbService csdb)
 {
     public const int PageSize = 20;
 
@@ -44,6 +46,28 @@ public sealed class Catalog(ServerOptions options)
     public IReadOnlyList<Entry> List(Section section, int folderId)
     {
         var folder = Resolve(section, folderId);
+        if (section == Section.Programs && csdb.Enabled)
+        {
+            if (folder.Path == csdb.Root)
+            {
+                return CsdbService.Lists
+                    .Select(list => (Entry)new FolderEntry(list.Name + "/", IdOf(section, csdb.ListPath(list.Key), folderId, false)))
+                    .ToList();
+            }
+
+            // A release's folder is the same on every list, but going up returns to the list it was opened from
+            if (csdb.ListKey(folder.Path) is { } key)
+            {
+                return csdb.Releases(key)
+                    .Select(release => (Entry)new FolderEntry(CsdbService.MenuName(release) + "/",
+                        IdOf(section, csdb.ReleasePath(release.Id), folderId, false, Path.Combine(folder.Path, release.Id.ToString()))))
+                    .ToList();
+            }
+
+            if (csdb.ReleaseId(folder.Path) is { } id)
+                csdb.Download(id);
+        }
+
         if (folder.IsDiskImage)
         {
             return DiskImage.Load(folder.Path).Programs()
@@ -65,8 +89,13 @@ public sealed class Catalog(ServerOptions options)
         var folderEntries = subfolders.Concat(diskImages)
             .OrderBy(f => f.Name, StringComparer.OrdinalIgnoreCase)
             .Select(f => (Entry)new FolderEntry(f.Name + "/", IdOf(section, f.Path, folderId, f.IsDiskImage)));
-        if (section == Section.Programs && folder.Path == FolderOf(section) && HasPlugins)
-            folderEntries = folderEntries.Prepend(new FolderEntry("Plugins/", IdOf(section, PluginFolder, 0, false)));
+        if (section == Section.Programs && folder.Path == FolderOf(section))
+        {
+            if (csdb.Enabled)
+                folderEntries = folderEntries.Prepend(new FolderEntry("CSDb/", IdOf(section, csdb.Root, 0, false)));
+            if (HasPlugins)
+                folderEntries = folderEntries.Prepend(new FolderEntry("Plugins/", IdOf(section, PluginFolder, 0, false)));
+        }
 
         var fileEntries = directory.EnumerateFiles()
             .Where(f => !f.Name.StartsWith('.') && Sources[section].Extensions.Contains(f.Extension.ToLowerInvariant()))
@@ -121,6 +150,8 @@ public sealed class Catalog(ServerOptions options)
         var folder = Resolve(section, folderId);
         if (folder.Path == PluginFolder)
             return "Plugins";
+        if (csdb.Title(folder.Path) is { } title)
+            return title;
         return Path.GetRelativePath(FolderOf(section), folder.Path) is "." ? "" : Path.GetRelativePath(FolderOf(section), folder.Path);
     }
 
@@ -144,9 +175,10 @@ public sealed class Catalog(ServerOptions options)
         return new Folder(section, FolderOf(section), 0, false);
     }
 
-    int IdOf(Section section, string path, int parent, bool isDiskImage)
+    /// <summary>The id of a folder; <paramref name="key"/> when the same path is reached in more than one way.</summary>
+    int IdOf(Section section, string path, int parent, bool isDiskImage, string? key = null)
     {
-        var key = $"{section}:{path}";
+        key = $"{section}:{key ?? path}";
         lock (folderLock)
         {
             if (folderIds.TryGetValue(key, out var id))

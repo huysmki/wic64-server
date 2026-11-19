@@ -1,6 +1,7 @@
 using System.Text;
 using Wic64Server.Activity;
 using Wic64Server.Content;
+using Wic64Server.Csdb;
 using Wic64Server.Screens;
 
 namespace Wic64Server.Uploads;
@@ -11,7 +12,7 @@ namespace Wic64Server.Uploads;
 /// (by default content/prg/From C64, so it shows up in the browser and the web UI). The other way round,
 /// a .d64 from the computer is written to a real disk, one track at a time.
 /// </summary>
-public sealed class DriveSession(ServerOptions options, ActivityLog activity, ILogger<DriveSession> log)
+public sealed class DriveSession(ServerOptions options, CsdbService csdb, ActivityLog activity, ILogger<DriveSession> log)
 {
     const int PageSize = 20;
 
@@ -276,7 +277,7 @@ public sealed class DriveSession(ServerOptions options, ActivityLog activity, IL
             {
                 var folders = new[] { PrgFolder, UploadFolder }.Where(Directory.Exists).Distinct();
                 images = folders.SelectMany(f => Directory.EnumerateFiles(f, "*", SearchOption.AllDirectories))
-                    .Where(f => Path.GetExtension(f).Equals(".d64", StringComparison.OrdinalIgnoreCase))
+                    .Where(f => Path.GetExtension(f).Equals(".d64", StringComparison.OrdinalIgnoreCase) && !Hidden(f))
                     .Distinct()
                     .OrderBy(f => DisplayPath(f), StringComparer.OrdinalIgnoreCase)
                     .ToList();
@@ -294,11 +295,15 @@ public sealed class DriveSession(ServerOptions options, ActivityLog activity, IL
             for (var i = 0; i < onPage.Count; i++)
             {
                 var row = 2 + i;
-                var folder = Path.GetDirectoryName(DisplayPath(onPage[i])) ?? "";
+                // the folder on the right; for a downloaded CSDb release its name, which starts more telling than it ends
+                var folder = csdb.Release(onPage[i]) is var (release, _)
+                    ? release.Length <= 13 ? release : release[..12] + "~"
+                    : Path.GetDirectoryName(DisplayPath(onPage[i])) is { Length: > 13 } path ? ".." + path[^11..]
+                    : Path.GetDirectoryName(DisplayPath(onPage[i])) ?? "";
                 screen.Print(row, 1, ((char)('A' + i)).ToString(), reverse: true);
                 screen.Print(row, 3, Path.GetFileNameWithoutExtension(onPage[i]), folder == "" ? 37 : 23);
                 if (folder != "")
-                    screen.Print(row, 27, folder.Length <= 13 ? folder : ".." + folder[^11..], 13);
+                    screen.Print(row, 27, folder, 13);
             }
 
             screen.Print(22, 1, "A-T write the image to the disk");
@@ -310,7 +315,16 @@ public sealed class DriveSession(ServerOptions options, ActivityLog activity, IL
     }
 
     string DisplayPath(string path) =>
-        Path.GetRelativePath(path.StartsWith(PrgFolder + Path.DirectorySeparatorChar) ? PrgFolder : Path.GetDirectoryName(UploadFolder)!, path);
+        csdb.Title(path) ?? Path.GetRelativePath(path.StartsWith(PrgFolder + Path.DirectorySeparatorChar) ? PrgFolder : Path.GetDirectoryName(UploadFolder)!, path);
+
+    /// <summary>In a hidden folder (.backups, .scratched), except the downloaded CSDb releases.</summary>
+    bool Hidden(string path)
+    {
+        if (csdb.Release(path) is not null)
+            return false;
+        var relative = Path.GetRelativePath(path.StartsWith(PrgFolder + Path.DirectorySeparatorChar) ? PrgFolder : UploadFolder, path);
+        return relative.Split(Path.DirectorySeparatorChar).SkipLast(1).Any(part => part.StartsWith('.'));
+    }
 
     /// <summary>
     /// Chooses the image to write: returns rows 23 and 24 of the question for the C64 (80 screen codes), then

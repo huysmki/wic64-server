@@ -31,6 +31,10 @@ namespace Wic64Server.Api;
 ///                                     (c64/savehelper.asm)
 /// GET /f/{folder}/{chunk}/{name}      OPEN from the file helper, name in hex: last chunk? (0/1) and up to 64 bytes
 ///                                     of the file, or only status $01
+/// GET /f/{folder}/0000/{name}        ... a name opened for writing (",W", ",A"): only status $02 when the server takes it
+/// POST /a/{folder}/{part}/{name}      a file the file helper writes: up to 64 bytes, part with bit 15 on the last one
+///                                     (CLOSE; then also as GET, without data) -> status $00, or $01 + message
+/// GET /c/{folder}/{command}           a command on channel 15, in hex: status $00 and the drive status ("00, OK,00,00")
 /// POST /w/{folder}/{start}/{part}/{name}  SAVE from the save helper, name in hex, part with bit 7 on the last one:
 ///                                     a part of the memory (WiC64 HTTP POST) -> status $00, or $01 + message
 /// GET /o                              the WiC64 portal (fetched from x.wic64.net), like /p
@@ -77,6 +81,9 @@ public sealed class C64Endpoints(
         app.MapGet("/l/{folder}/{name}", LoadFile);
         app.MapGet("/f/{folder}/{chunk}/{name}", ReadFile);
         app.MapPost("/w/{folder}/{start}/{part}/{name}", SaveFile);
+        app.MapPost("/a/{folder}/{part}/{name}", WriteFile);
+        app.MapGet("/a/{folder}/{part}/{name}", WriteFile);
+        app.MapGet("/c/{folder}/{command}", DriveCommand);
     }
 
     /// <summary>
@@ -178,8 +185,10 @@ public sealed class C64Endpoints(
                 {
                     log.LogInformation("Program {File} from {Image}", disk.Name, Path.GetFileName(disk.ImagePath));
                     activity.Add("program", $"Loading {disk.Name} from {Path.GetFileName(disk.ImagePath)}");
-                    if (loads.Warning(ParseHex(folder)!.Value) is not null)
-                        activity.Add("error", $"{Path.GetFileName(disk.ImagePath)} overwrites the LOAD helper: loading more files may hang (use a real drive)");
+                    if (loads.Warning(ParseHex(folder)!.Value) is { } warning)
+                        activity.Add("error", warning.StartsWith("! Own loader")
+                            ? $"{Path.GetFileName(disk.ImagePath)} reads data outside its files with its own loader: it needs a real drive (write it to a disk with the Disk tools)"
+                            : $"{Path.GetFileName(disk.ImagePath)} overwrites the LOAD helper: loading more files may hang (use a real drive)");
                     var program = DiskImage.Load(disk.ImagePath).Read(disk.File);
                     loads.Started(disk.Name, program);
                     return C64Response.Program(disk.File.Name, program);
@@ -384,10 +393,43 @@ public sealed class C64Endpoints(
         }
     }
 
+    async Task<IResult> WriteFile(HttpRequest request, string folder, string part, string name)
+    {
+        try
+        {
+            if (ParseHex(folder) is not { } f || ParseHex(part) is not { } p)
+                return Error("bad write request");
+            var data = HttpMethods.IsPost(request.Method) ? await DriveEndpoints.PostedData(request) : [];
+            return saves.WritePart(f, p, Convert.FromHexString(name), data) is { } problem ? Error(problem) : Ok();
+        }
+        catch (Exception e)
+        {
+            log.LogWarning(e, "Writing a file failed");
+            return Error($"write: {e.Message}");
+        }
+    }
+
+    IResult DriveCommand(string folder, string command)
+    {
+        try
+        {
+            return ParseHex(folder) is { } f ? Ok(saves.Command(f, Convert.FromHexString(command))) : Error("bad command");
+        }
+        catch (Exception e)
+        {
+            log.LogWarning(e, "Command failed");
+            return Ok("31,SYNTAX ERROR,00,00\r"u8.ToArray());
+        }
+    }
+
     IResult ReadFile(string folder, string chunk, string name)
     {
         try
         {
+            if (chunk == "0000" && ParseHex(folder) is { } writeFolder
+                && saves.BeginWrite(writeFolder, Convert.FromHexString(name)) is { } opened)
+                return opened ? Results.Bytes([2], "application/octet-stream") : NotFound();
+
             return ParseHex(folder) is { } f && ParseHex(chunk) is { } c && loads.ReadChunk(f, c, Convert.FromHexString(name)) is var (data, last)
                 ? Ok([last ? (byte)1 : (byte)0], data)
                 : NotFound(); // the file helper then tries the real drive
