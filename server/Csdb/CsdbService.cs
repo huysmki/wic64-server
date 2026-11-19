@@ -105,6 +105,32 @@ public sealed partial class CsdbService(ServerOptions options, ActivityLog activ
         return (name, parts.Length > 1 ? parts[1] : null);
     }
 
+    /// <summary>
+    /// The name of a downloaded release; asks CSDb when this server hasn't seen it yet (a release downloaded before
+    /// its folder kept the name), and remembers the answer.
+    /// </summary>
+    public string NameOf(int id)
+    {
+        var folder = ReleasePath(id);
+        if (Release(folder) is var (name, _) && name != id.ToString())
+            return name;
+
+        try
+        {
+            name = (string?)XDocument.Parse(Get($"{Site}/webservice/?type=release&id={id}")).Descendants("Release").First().Element("Name")
+                   ?? id.ToString();
+            if (Directory.Exists(folder))
+                File.WriteAllText(Path.Combine(folder, NameFile), name);
+            lock (listLock)
+                known.TryAdd(id, new Release(id, name, null));
+            return name;
+        }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or InvalidOperationException)
+        {
+            return id.ToString();
+        }
+    }
+
     /// <summary>The release's name, in its folder (hidden from the menu: it starts with a dot).</summary>
     const string NameFile = ".name";
 

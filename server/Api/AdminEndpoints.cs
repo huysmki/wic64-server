@@ -33,6 +33,7 @@ public sealed class AdminEndpoints(
         string Details);
 
     public sealed record NameRequest(string Section, string Path, string Name);
+    public sealed record MoveRequest(string Section, string Path, string To);
     public sealed record PushRequest(string? Section, string Path, int? Index, bool Save, bool Run = true);
 
     static readonly string[] ProgramExtensions = [".prg"];
@@ -127,6 +128,47 @@ public sealed class AdminEndpoints(
             else
                 File.Move(source, target);
             return Results.Ok();
+        });
+
+        // All folders of a section (not the hidden ones), for choosing where to move or keep something
+        api.MapGet("/folders", (string section) =>
+        {
+            var root = SectionRoot(catalog, section);
+            IEnumerable<string> folders = Directory.Exists(root)
+                ? Directory.EnumerateDirectories(root, "*", SearchOption.AllDirectories)
+                    .Select(f => Relative(root, f))
+                    .Where(f => !f.Split('/').Any(part => part.StartsWith('.')))
+                    .Order(StringComparer.OrdinalIgnoreCase)
+                : [];
+            return Results.Ok(new { folders = folders.Prepend("") });
+        });
+
+        api.MapPost("/move", (MoveRequest r) =>
+        {
+            var root = SectionRoot(catalog, r.Section);
+            var source = Resolve(root, r.Path);
+            var folder = Resolve(root, r.To);
+            if (source == root)
+                return Results.BadRequest(new { error = "can not move the section folder" });
+            if (!File.Exists(source) && !Directory.Exists(source))
+                return Results.NotFound(new { error = "not found" });
+            if (!Directory.Exists(folder))
+                return Results.NotFound(new { error = "folder not found" });
+            if (folder == source || folder.StartsWith(source + Path.DirectorySeparatorChar))
+                return Results.BadRequest(new { error = "can not move a folder into itself" });
+
+            var target = Path.Combine(folder, Path.GetFileName(source));
+            if (target == source)
+                return Results.Ok(new { path = Relative(root, target) });
+            if (File.Exists(target) || Directory.Exists(target))
+                return Results.Conflict(new { error = $"{Path.GetFileName(source)} already exists there" });
+
+            if (Directory.Exists(source))
+                Directory.Move(source, target);
+            else
+                File.Move(source, target);
+            activity.Add("files", $"Moved {Path.GetFileName(source)} to {(r.To is "" or null ? "the top folder" : r.To)}");
+            return Results.Ok(new { path = Relative(root, target) });
         });
 
         api.MapDelete("/files", (string section, string path) =>

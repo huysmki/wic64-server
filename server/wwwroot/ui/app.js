@@ -180,6 +180,7 @@ function renderRow(item, insideDisk) {
       }, 'GET'));
     }
     actions.append(
+      element('button', { type: 'button', class: 'key small', title: 'Move to another folder', onclick: () => move(item) }, 'MOVE'),
       element('button', { type: 'button', class: 'key small', onclick: () => rename(item) }, 'RENAME'),
       element('button', { type: 'button', class: 'key small', onclick: () => remove(item) }, 'DELETE'));
   }
@@ -236,6 +237,23 @@ function askName(title, value = '') {
   });
 }
 
+// Asks for a folder of the section: the folder's path ('' for the top), or null when cancelled
+async function chooseFolder(section, title, okLabel, preferred = '') {
+  const data = await attempt(() => api('/api/folders?' + query({ section })));
+  if (!data) return null;
+  const top = sections[section].title;
+  const select = $('#folder-dialog-select');
+  select.replaceChildren(...data.folders.map((folder) =>
+    element('option', { value: folder }, folder ? `${top}/${folder}` : top)));
+  if (data.folders.includes(preferred)) select.value = preferred;
+  $('#folder-dialog-title').textContent = title;
+  $('#folder-dialog-ok').textContent = okLabel;
+  const dialog = $('#folder-dialog');
+  dialog.showModal();
+  return new Promise((resolve) =>
+    dialog.addEventListener('close', () => resolve(dialog.returnValue === 'ok' ? select.value : null), { once: true }));
+}
+
 function confirmDelete(title, text) {
   const dialog = $('#confirm-dialog');
   $('#confirm-dialog-title').textContent = title;
@@ -258,6 +276,16 @@ async function rename(item) {
   const name = await askName(`Rename ${item.name}`, item.name);
   if (!name || name === item.name) return;
   await attempt(() => postJson('/api/rename', { section: state.section, path: item.path, name }), `Renamed to ${name}`);
+  loadFiles();
+}
+
+async function move(item) {
+  const current = item.path.includes('/') ? item.path.slice(0, item.path.lastIndexOf('/')) : '';
+  const to = await chooseFolder(state.section, `MOVE ${item.name.toUpperCase()} TO`, 'MOVE', current);
+  if (to === null || to === current) return;
+  await attempt(
+    () => postJson('/api/move', { section: state.section, path: item.path, to }),
+    `Moved ${item.name} to ${to ? sections[state.section].title + '/' + to : sections[state.section].title}`);
   loadFiles();
 }
 
@@ -437,7 +465,21 @@ function renderRelease(release) {
     element('td', { class: 'details' }, release.group || ''),
     element('td', {}, element('div', { class: 'row-actions' },
       element('button', { type: 'button', class: 'key small primary', title: 'Download it and run its first program on the C64', onclick: () => runRelease(release, false) }, 'RUN'),
-      element('button', { type: 'button', class: 'key small', title: 'Save its first program to disk (drive 8) on the C64, then run it', onclick: () => runRelease(release, true) }, 'SAVE+RUN'))));
+      element('button', { type: 'button', class: 'key small', title: 'Save its first program to disk (drive 8) on the C64, then run it', onclick: () => runRelease(release, true) }, 'SAVE+RUN'),
+      element('button', { type: 'button', class: 'key small', title: 'Copy its programs and disk images into a Programs folder', onclick: () => keepRelease(release) }, 'KEEP'))));
+}
+
+// Copies a release into a Programs folder (the last one chosen is proposed again)
+async function keepRelease(release) {
+  let last = '';
+  try { last = localStorage.getItem('keepFolder') || ''; } catch { /* no storage: start at the top */ }
+  const folder = await chooseFolder('prg', `KEEP ${release.name.toUpperCase()} IN`, 'KEEP', last);
+  if (folder === null) return;
+  try { localStorage.setItem('keepFolder', folder); } catch { /* not remembered */ }
+  toast(`Downloading ${release.name}...`);
+  await attempt(
+    () => postJson('/api/csdb/keep', { id: release.id, folder }),
+    (result) => `Kept ${result.name} in PROGRAMS${result.folder ? '/' + result.folder : ''} (${result.files} file${result.files === 1 ? '' : 's'})`);
 }
 
 async function runRelease(release, save) {

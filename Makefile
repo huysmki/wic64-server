@@ -39,7 +39,7 @@ RUN       ?= 1
 
 .PHONY: all server push vice release clean FORCE
 
-all: build/browser.prg build/standalone.bin build/loadhelper.bin build/filehelper.bin build/loadguard.bin build/savehelper.bin $(PLUGINS) content/prg/hello.prg content/prg/loadtest.prg
+all: build/browser.prg build/standalone.bin build/loadhelper.bin build/filehelper.bin build/loadguard.bin build/savehelper.bin build/loadmodule.bin $(PLUGINS) content/prg/hello.prg content/prg/loadtest.prg
 
 build/browser.prg: c64/browser.asm c64/wic64-library/wic64.asm c64/wic64-library/wic64.h build/config.asm
 	$(ACME) $(ACMEFLAGS) -f cbm -l build/browser.sym -o $@ c64/browser.asm
@@ -72,6 +72,12 @@ build/savehelper.bin: c64/savehelper.asm
 	@mkdir -p build
 	$(ACME) $(ACMEFLAGS) -f plain -o $@ $<
 	$(ACME) $(ACMEFLAGS) -DORIGIN=0x1100 -f plain -o build/savehelper-1100.bin $<
+
+# The same for the LOAD module (the LOAD helper for programs that overwrite the tape buffer)
+build/loadmodule.bin: c64/loadmodule.asm
+	@mkdir -p build
+	$(ACME) $(ACMEFLAGS) -f plain -o $@ $<
+	$(ACME) $(ACMEFLAGS) -DORIGIN=0x1100 -f plain -o build/loadmodule-1100.bin $<
 
 # Plugins: C64 programs the browser starts from the Programs menu (Plugins/); the server fills in its address
 build/plugins/%.prg: c64/plugins/%.asm c64/wic64-library/wic64.asm c64/wic64-library/wic64.h

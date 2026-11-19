@@ -7,6 +7,7 @@
 ;
 ;   A-T        upload the file; open a folder or disk image (SD2IEC)
 ;   SHIFT+A-T  upload a disk image file itself (SD2IEC)
+;   CRSR up/down  move the selection; RETURN / SHIFT+RETURN do what its letter / SHIFT+letter does
 ;   INST/DEL   one folder up, or out of a disk image (SD2IEC)
 ;   F3         back up the whole disk as a .d64 (asks for its name; RUN/STOP stops it)
 ;   F7         write a .d64 from the computer to the disk (Y: write, F: format first;
@@ -56,6 +57,9 @@ KEY_SHIFT_A     = $c1
 KEY_LEFT_ARROW  = $5f
 KEY_A           = $41
 KEY_RETURN      = $0d
+KEY_SHIFT_RETURN = $8d
+KEY_DOWN        = $11
+KEY_UP          = $91
 KEY_RUN_STOP    = $03
 
 ADDRESS_MAX     = 30                    ; the server address, as in the browser
@@ -120,6 +124,9 @@ start:
 ; Main loop
 ;------------------------------------------------------------------------------
 
+set_dir_cursor:
+    stx cursor
+    jsr apply_colors
 main_loop:
     jsr GETIN
     beq main_loop
@@ -135,8 +142,35 @@ main_loop:
 +   cmp #KEY_LEFT_ARROW
     bne +
     jmp back_to_browser
++   cmp #KEY_DOWN                       ; CRSR down/up: the selection; past the end of a page to the next or previous
+    bne +
+    ldx cursor
+    inx
+    cpx dir_count
+    bcc set_dir_cursor
+    lda #0
+    sta cursor
+    jmp dir_next_page
++   cmp #KEY_UP
+    bne +
+    ldx cursor
+    dex
+    bpl set_dir_cursor
+    lda #19                             ; the last entry of the previous page (receive_page keeps it in range)
+    sta cursor
+    jmp dir_previous_page
++   cmp #KEY_RETURN                     ; RETURN / SHIFT+RETURN: the selected entry, like its letter / SHIFT+letter
+    bne +
+    ldx #0
+    beq ++
++   cmp #KEY_SHIFT_RETURN
+    bne +
+    ldx #1
+++  lda cursor
+    jmp select_entry
 +   cmp #'+'
     bne +
+dir_next_page:
     lda page
     clc
     adc #1
@@ -146,6 +180,7 @@ main_loop:
 ++  jmp show_page
 +   cmp #'-'
     bne +
+dir_previous_page:
     lda page
     bne ++
     lda dir_pages
@@ -192,6 +227,8 @@ read_directory:
     sta resume
     lda #>main_loop
     sta resume+1
+    lda #0                              ; a new directory: the selection at the top
+    sta cursor
     jsr clear_screen
     jsr draw_title
     +status msg_reading_directory
@@ -241,7 +278,20 @@ receive_page:
     +wic64_receive dir_count, dir_names_end - dir_count
     +wic64_receive screen, 1000
     +wic64_finalize
+    lda dir_count
+    jsr keep_cursor
     jmp apply_colors
+
+; The selection within the A entries on screen (none when there are none)
+keep_cursor:
+    sta list_count
+    ldx cursor
+    cpx list_count
+    bcc +
+    tax
+    dex
+    stx cursor
++   rts
 
 ;------------------------------------------------------------------------------
 ; Upload a file: read it with OPEN "name,P,R" and send it in parts of 32 KB
@@ -827,6 +877,7 @@ image_list:
     lda #>image_loop
     sta resume+1
     lda #0
+    sta cursor
 show_image_page:
     sta page
     ldx #<path_images
@@ -843,6 +894,11 @@ show_image_page:
     +wic64_receive image_count, 2
     +wic64_receive screen, 1000
     +wic64_finalize
+    lda image_count
+    jsr keep_cursor
+    ldx cursor
+set_image_cursor:
+    stx cursor
     jsr apply_colors
 
 image_loop:
@@ -863,8 +919,30 @@ image_loop:
 ++  stx device
     lda page
     jmp show_image_page
++   cmp #KEY_DOWN                       ; CRSR down/up: the selection; past the end of a page to the next or previous
+    bne +
+    ldx cursor
+    inx
+    cpx image_count
+    bcc set_image_cursor
+    lda #0
+    sta cursor
+    beq image_next_page
++   cmp #KEY_UP
+    bne +
+    ldx cursor
+    dex
+    bpl set_image_cursor
+    lda #19
+    sta cursor
+    bne image_previous_page
++   cmp #KEY_RETURN                     ; RETURN: the selected image, like its letter
+    bne +
+    lda cursor
+    jmp choose_image
 +   cmp #'+'
     bne +
+image_next_page:
     lda page
     clc
     adc #1
@@ -874,6 +952,7 @@ image_loop:
 ++  jmp show_image_page
 +   cmp #'-'
     bne +
+image_previous_page:
     lda page
     bne ++
     lda image_pages
@@ -881,12 +960,16 @@ image_loop:
     sbc #1
     jmp show_image_page
 +   cmp #KEY_A
-    bcc image_loop
+    bcc no_image
     cmp #KEY_A+20
-    bcs image_loop
+    bcs no_image
     sbc #KEY_A-1                        ; carry is clear
+choose_image:
     cmp image_count
-    bcs image_loop
+    bcc +
+no_image:
+    jmp image_loop
++
 
     ; the server checks the image and asks: rows 23 and 24, then the format command
     sta entry
@@ -1284,7 +1367,26 @@ apply_colors:
 !for row, 2, 21 {
     sta color_ram + row*40 + 1
 }
-    ; fall through
+    ldx cursor                          ; the selected entry: white (rows 2-21, columns 3-39)
+    cpx list_count
+    bcs ++
+    lda #<(color_ram + 2*40 + 3)
+    ldy #>(color_ram + 2*40 + 3)
+-   dex
+    bmi +
+    clc
+    adc #40
+    bcc -
+    iny
+    bcs -                               ; carry is set
++   sta ptr
+    sty ptr+1
+    ldy #36
+    lda #1
+-   sta (ptr),y
+    dey
+    bpl -
+++  ; fall through
 
 white_status:
     ldx #39
@@ -1411,6 +1513,8 @@ resume:         !word main_loop             ; where show_error goes back to
 }
 device:         !byte 8
 shifted:        !byte 0
+cursor:         !byte 0                 ; the selected entry (CRSR keys, RETURN)
+list_count:     !byte 0                 ; entries on screen: of the directory or the image list
 page:           !byte 0
 entry:          !byte 0
 part:           !byte 0

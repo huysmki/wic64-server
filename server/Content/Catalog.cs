@@ -43,7 +43,25 @@ public sealed class Catalog(ServerOptions options, CsdbService csdb)
 
     bool HasPlugins => Directory.Exists(PluginFolder) && Directory.EnumerateFiles(PluginFolder, "*.prg").Any();
 
+    /// <summary>The name of the entry that goes up a folder, first in every folder but a section's root.</summary>
+    public const string Up = "..";
+
+    /// <summary>
+    /// The entries of a folder: ".." first (but not in a section's root), then the subfolders and disk images, then
+    /// the files. The ".." entry's id is the parent folder's; for the root that is a second id of the root, as id 0
+    /// means "a file" to the C64.
+    /// </summary>
     public IReadOnlyList<Entry> List(Section section, int folderId)
+    {
+        var entries = Entries(section, folderId);
+        var folder = Resolve(section, folderId);
+        if (folder.Path == FolderOf(section))
+            return entries;
+        var parent = folder.Parent != 0 ? folder.Parent : IdOf(section, FolderOf(section), 0, false, Up);
+        return [new FolderEntry(Up, parent), .. entries];
+    }
+
+    IReadOnlyList<Entry> Entries(Section section, int folderId)
     {
         var folder = Resolve(section, folderId);
         if (section == Section.Programs && csdb.Enabled)

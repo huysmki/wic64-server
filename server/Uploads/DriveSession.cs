@@ -152,8 +152,8 @@ public sealed class DriveSession(ServerOptions options, CsdbService csdb, Activi
                 screen.Print(row, 36, $"{onPage[i].Blocks,3}", 3);
             }
 
-            screen.Print(22, 1, "A-T open/upload DEL up F1 read F5 drive");
-            screen.Print(23, 1, "F3 backup F7 write .d64 +/- page ← back");
+            screen.Print(22, 1, "A-T/RET open/upload  DEL up  F5 drive");
+            screen.Print(23, 1, "F1 read F3 backup F7 write +/- ← back");
             screen.Print(24, 0, $"{blocksFree} blocks free - uploads to {UploadFolderName}", 40);
 
             var disk = new byte[17];
@@ -306,8 +306,8 @@ public sealed class DriveSession(ServerOptions options, CsdbService csdb, Activi
                     screen.Print(row, 27, folder, 13);
             }
 
-            screen.Print(22, 1, "A-T write the image to the disk");
-            screen.Print(23, 1, "F5 drive  +/- page  ← back");
+            screen.Print(22, 1, "A-T/RET write the image to the disk");
+            screen.Print(23, 1, "CRSR select  F5 drive  +/- page  ← back");
             screen.Print(24, 0, "Careful: this overwrites the whole disk", 40);
 
             return [(byte)onPage.Count, (byte)pages, .. screen.Data];

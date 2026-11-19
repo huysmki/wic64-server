@@ -25,6 +25,7 @@ public sealed class LoadService(Catalog catalog, ServerOptions options, Activity
     (string Name, byte[] Program)? started;
     (string Key, byte[] Data)? openFile;
     readonly List<(int Page, int Pages)> placed = []; // where the starter's modules went, so the next ones go elsewhere
+    byte[]? loadModule; // the LOAD module for the program that is starting: placed first, asked for last
 
     /// <summary>
     /// The helper code for $02a7 and $0334. The browser writes the request header and the URL
@@ -81,6 +82,7 @@ public sealed class LoadService(Catalog catalog, ServerOptions options, Activity
             placed.Clear(); // the first module the starter asks for
 
         var (path, isDiskImage) = catalog.PathOf(Section.Programs, folder);
+        PlaceLoadModule(path, isDiskImage);
         var hasDataFiles = isDiskImage
             ? DiskImage.Load(path).Files().Any(f => f.Type != FileType.Prg)
             : System.IO.Directory.Exists(path) && System.IO.Directory.EnumerateFiles(path)
@@ -112,6 +114,12 @@ public sealed class LoadService(Catalog catalog, ServerOptions options, Activity
     {
         var (path, isDiskImage) = catalog.PathOf(Section.Programs, folder);
         var (programs, startedProgram) = ProgramsAndStarted(path, isDiskImage);
+        lock (startedLock)
+        {
+            if (loadModule is not null)
+                return NoModule; // the LOAD module has its own copy of the request
+        }
+
         if (startedProgram is null || !MemoryScan.IsBasic(startedProgram))
             return NoModule;
 
@@ -162,6 +170,50 @@ public sealed class LoadService(Catalog catalog, ServerOptions options, Activity
         activity.Add("load", $"Save helper at {Range(place)}: SAVE goes to {Path.GetFileName(path)}");
         return module;
     }
+
+    /// <summary>
+    /// The LOAD module (c64/loadmodule.asm) for programs that LOAD more files but overwrite the LOAD helper in the tape
+    /// buffer: the same LOAD from free pages. It is placed before the other modules, as LOAD matters most, and handed
+    /// out last (file name $03). On a disk image all its programs count; in a folder only the program itself.
+    /// </summary>
+    void PlaceLoadModule(string path, bool isDiskImage)
+    {
+        lock (startedLock)
+            loadModule = null;
+
+        var (programs, startedProgram) = ProgramsAndStarted(path, isDiskImage);
+        var atRisk = isDiskImage ? Scan(programs).HelperAtRisk
+            : startedProgram is not null && Scan([("", startedProgram)]).HelperAtRisk;
+        if (!atRisk)
+            return;
+
+        if (Relocate("loadmodule", ScanBesidesPlaced(programs)) is not var (module, place))
+        {
+            activity.Add("error", "No free memory to move the LOAD helper: loading more files may hang (use a real drive)");
+            return;
+        }
+
+        lock (startedLock)
+            loadModule = module;
+        activity.Add("load", $"The program overwrites the LOAD helper: LOAD module at {Range(place)} instead");
+    }
+
+    /// <summary>The LOAD module as a .prg, for the starter (file name $03); only an RTS when the LOAD helper can stay.</summary>
+    public byte[] LoadModule()
+    {
+        lock (startedLock)
+            return loadModule ?? NoModule;
+    }
+
+    /// <summary>Programs that overwrite the LOAD helper and leave no room for the LOAD module: loading may hang.</summary>
+    static bool CantMoveHelper(IEnumerable<(string Name, byte[] Program)> programs)
+    {
+        var scan = Scan(programs);
+        return scan.HelperAtRisk && scan.FreePages(LoadModulePages) is null;
+    }
+
+    /// <summary>Pages of the LOAD module (c64/loadmodule.asm is under 512 bytes).</summary>
+    const int LoadModulePages = 2;
 
     /// <summary>What the programs use, plus the pages of the modules placed before; marks the new module's pages.</summary>
     MemoryScan ScanBesidesPlaced(IEnumerable<(string Name, byte[] Program)> programs)
@@ -231,8 +283,8 @@ public sealed class LoadService(Catalog catalog, ServerOptions options, Activity
     /// <summary>
     /// A warning for the menu of a disk image: it has its own loader (trackmo demos, original games), seen from data
     /// outside its files or code sent into the drive, so it needs a real drive; or its programs LOAD more files but
-    /// overwrite the LOAD helper, so
-    /// loading hangs. Only for disk images, where the programs belong together; not for folders of unrelated programs.
+    /// overwrite the LOAD helper and leave no room to move it (the LOAD module), so loading hangs. Only for disk
+    /// images, where the programs belong together; not for folders of unrelated programs.
     /// </summary>
     public string? Warning(int folder)
     {
@@ -241,10 +293,10 @@ public sealed class LoadService(Catalog catalog, ServerOptions options, Activity
             var (path, isDiskImage) = catalog.PathOf(Section.Programs, folder);
             if (!isDiskImage)
                 return null;
-            var scan = Scan(Programs(path, isDiskImage));
-            if (scan.SendsDriveCode || DiskImage.Load(path).HiddenBlocks() > OwnLoaderBlocks)
+            var programs = Programs(path, isDiskImage).ToList();
+            if (Scan(programs).SendsDriveCode || DiskImage.Load(path).HiddenBlocks() > OwnLoaderBlocks)
                 return "! Own loader: write it to a real disk";
-            return scan.HelperAtRisk ? "! Overwrites the LOAD helper: may hang" : null;
+            return CantMoveHelper(programs) ? "! Overwrites the LOAD helper: may hang" : null;
         }
         catch (Exception e)
         {
@@ -253,8 +305,8 @@ public sealed class LoadService(Catalog catalog, ServerOptions options, Activity
         }
     }
 
-    /// <summary>A single program that LOADs more files but overwrites the LOAD helper.</summary>
-    public static bool OverwritesHelper(string name, byte[] program) => Scan([(name, program)]).HelperAtRisk;
+    /// <summary>A single program that LOADs more files, overwrites the LOAD helper and leaves no room to move it.</summary>
+    public static bool OverwritesHelper(string name, byte[] program) => CantMoveHelper([(name, program)]);
 
     static MemoryScan Scan(IEnumerable<(string Name, byte[] Program)> programs)
     {
@@ -377,6 +429,8 @@ public sealed class LoadService(Catalog catalog, ServerOptions options, Activity
             return LoadGuard(folder);
         if (petsciiName is [2])
             return SaveHelper(folder);
+        if (petsciiName is [3])
+            return LoadModule();
 
         var name = StripDrive(petsciiName);
         var (path, isDiskImage) = catalog.PathOf(Section.Programs, folder);

@@ -37,9 +37,9 @@ public sealed class MenuScreen(Catalog catalog, SidService sids, LoadService loa
 
         screen.Print(22, 1, section switch
         {
-            Section.Programs => "A-T run  SHIFT+A-T save  +/-  DEL up",
-            Section.Pictures => "A-T show   +/- page   DEL up",
-            _ => "A-T play  RET info  SPC next  STOP off",
+            Section.Programs => "A-T/RET run  SHIFT+RET save+run  DEL up",
+            Section.Pictures => "A-T/RET show   CRSR move   +/-  DEL up",
+            _ => "A-T/RET play  V info  SPC next  STOP off",
         });
         screen.Print(23, 1, "F1/F3/F5 sections  F2 server  ← portal");
         // Row 1 is free between the title and the entries; the browser clears the status line (row 24) itself
@@ -52,6 +52,10 @@ public sealed class MenuScreen(Catalog catalog, SidService sids, LoadService loa
     {
         switch (entry)
         {
+            case FolderEntry { Name: Catalog.Up }:
+                screen.Print(row, 3, Catalog.Up, 32);
+                break;
+
             case FolderEntry folder:
                 screen.Print(row, 3, folder.Name, 32);
                 screen.Print(row, 36, DiskImage.IsImage(folder.Name.TrimEnd('/')) ? Path.GetExtension(folder.Name.TrimEnd('/'))[1..].ToLowerInvariant() : "dir", 3);

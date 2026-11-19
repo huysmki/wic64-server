@@ -198,6 +198,8 @@ acme -v1 -f plain -o build/loadguard.bin c64/loadguard.asm
 acme -v1 -DORIGIN=0x1100 -f plain -o build/loadguard-1100.bin c64/loadguard.asm
 acme -v1 -f plain -o build/savehelper.bin c64/savehelper.asm
 acme -v1 -DORIGIN=0x1100 -f plain -o build/savehelper-1100.bin c64/savehelper.asm
+acme -v1 -f plain -o build/loadmodule.bin c64/loadmodule.asm
+acme -v1 -DORIGIN=0x1100 -f plain -o build/loadmodule-1100.bin c64/loadmodule.asm
 acme -v1 -I c64/wic64-library -f cbm -o build/plugins/disk-tools.prg c64/plugins/disk-tools.asm
 dotnet run --project server -- --Content=content --Build=build
 ```
@@ -236,16 +238,20 @@ The web UI shows both the IP address and the Bonjour name in its header.
 ### Menu
 
 The server draws the whole menu screen: 20 entries per page, a title bar with the folder and page, and help lines.
-Row 24 is the status line: messages, errors (in red) and the playing tune with its time.
+Row 24 is the status line: messages, errors (in red) and the playing tune with its time. The selected entry is white;
+every folder but a section's root starts with `..`, which goes up a folder.
 
 | Key | Action |
 |-----|--------|
 | F1 / F3 / F5 | Programs / Pictures / Music |
-| A–T | Open the entry: run a program, show a picture, play a tune, open a folder or `.d64` |
-| SHIFT+A–T | Save the program to disk (device 8) |
-| INST/DEL | Parent folder |
+| CRSR up / down | Move the selection; past the last or first entry to the next or previous page |
+| RETURN | Open the selected entry (on the info screen: back to the list) |
+| SHIFT+RETURN | Save the selected program to disk (device 8), then run it |
+| A–T | Open entry A–T: run a program, show a picture, play a tune, open a folder or `.d64` |
+| SHIFT+A–T | Save program A–T to disk (device 8) |
+| INST/DEL, `..` | Parent folder |
 | + / - | Next / previous page |
-| RETURN | Info screen of the playing tune (and back to the list) |
+| V | Info screen of the playing tune (and back to the list) |
 | SPACE | Next tune |
 | 1–9 | Select a subtune of the playing tune |
 | F7 or RUN/STOP | Stop the music |
@@ -255,8 +261,8 @@ Row 24 is the status line: messages, errors (in red) and the playing tune with i
 
 ### Saving to disk
 
-SHIFT+letter downloads the program and saves it to device 8 with its original load address. The status line then
-shows the drive's own reply, for example:
+SHIFT+letter downloads the program and saves it to device 8 with its original load address (SHIFT+RETURN does the
+same for the selected program, and then runs it). The status line then shows the drive's own reply, for example:
 
 - `00, ok,00,00`: saved.
 - "File exists - replace it? Y/N": a file with that name is already on the disk. **Y** deletes the old file
@@ -276,11 +282,13 @@ It uses the "Press Start 2P" and "VT323" fonts from Google Fonts (without intern
 - **Programs / Pictures / Music:**
   - browse folders and open `.d64` images; the list shows load addresses and block counts
   - upload with the button or by dragging files onto the list
-  - create folders, rename, delete (with confirmation), download
+  - create folders, rename, move to another folder (MOVE), delete (with confirmation), download
 - **RUN / SAVE+RUN / SAVE:** pushes a program, also from inside a `.d64`, to the browser on the C64: run it, save it
   to drive 8 and run it, or only save it (the browser stays).
-- **CSDb:** search [CSDb](https://csdb.dk) for C64 releases; RUN downloads one and pushes its first program to the C64.
-  The results are on the C64 too, in the folder `CSDb/Search: …` (see [CSDb](#csdb)).
+- **CSDb:** search [CSDb](https://csdb.dk) for C64 releases; RUN downloads one and pushes its first program to the C64,
+  KEEP copies its programs and disk images into a Programs folder you choose (a release with more than one file gets
+  its own subfolder, named after it). The results are on the C64 too, in the folder `CSDb/Search: …` (see
+  [CSDb](#csdb)).
 - **SHOW ON C64 / PLAY ON C64:** shows a picture on the C64's screen (any key returns to the menu) or plays a tune,
   from the list or the preview panel. A pushed tune gets the same time display, info screen and auto-next as one
   picked on the C64.
@@ -346,10 +354,14 @@ This works for programs that load through the KERNAL: most BASIC programs, many 
 versions. Try `loadtest` in the Programs menu: it is two lines of BASIC that `LOAD"HELLO",8` from the server.
 
 **When a disk overwrites the LOAD helper.** The helper lives in memory that is normally free (`$02a7-$02ff` and the
-tape buffer), but some programs use it themselves. When the programs on a disk image both write there and LOAD
-more files, the menu shows **"! Overwrites the LOAD helper: may hang"** above the list, and the activity log warns
-when you start one. The server finds this by scanning the programs' code, so it is a strong hint, not a certainty.
-Such disks need a real drive or an SD2IEC; CD64 is an example.
+tape buffer), but some programs use it themselves. The server finds programs that both write there and LOAD more
+files by scanning their code (a strong hint, not a certainty), and moves the helper out of the way for them: they get
+the LOAD module (`c64/loadmodule.asm`, 2 pages), the same LOAD from the server on free pages, placed like the file
+helper and before it. The activity log says "LOAD module at …".
+
+Only when the disk's programs leave no 2 pages free does the menu show **"! Overwrites the LOAD helper: may hang"**
+above the list, and the activity log warns when you start one. Such disks need a real drive or an SD2IEC; CD64 is an
+example. A program that resets the KERNAL vectors itself also loses the helper, wherever it lives.
 
 **SEQ files, the command channel and the file helper.** Programs use data files (SEQ, USR, also PRG) with `OPEN`,
 `INPUT#`/`GET#`/`PRINT#` and `CLOSE`, and the drive's command channel 15. Programs on a disk image or folder with
@@ -443,7 +455,7 @@ the C64:
   shows its programs and disk images. From then on it's an ordinary folder: run, save to disk, LOAD, SEQ files and
   SAVE all work as with your own files.
 - Downloads are kept in `content/prg/.csdb`, a hidden folder, so a release only downloads once. Delete that folder
-  to clear the cache.
+  to clear the cache. To keep a release among your own programs, use KEEP in the web UI's CSDB tab.
 - **What runs:** one-file demos, intros, cracked games and tools work best. Most full-disk demos use their own
   loader (Spindle, Sparkle, Bitfire, Krill's), which runs inside a real 1541 and doesn't work through the browser, nor
   on an SD2IEC; the menu shows "! Own loader" for those disks. To run one, write its disk images to floppies with the
@@ -473,9 +485,11 @@ WiC64 portal), it sends the `Host` header without the port until it is switched 
 |-----|--------|
 | A–T | Upload the file (PRG, SEQ or USR); on an SD2IEC open a folder (`DIR`) or disk image (`.d64`, `.d71`, `.d81`, `.m2i`) |
 | SHIFT+A–T | SD2IEC: upload the disk image file itself instead of opening it |
+| CRSR up / down | Move the selection (white); past the last or first entry to the next or previous page |
+| RETURN / SHIFT+RETURN | Like the selected entry's letter / SHIFT+letter |
 | INST/DEL | SD2IEC: one folder up, or out of a disk image (`CD:←`) |
 | F3 | Back up the whole disk as a `.d64` (35 tracks, 683 sectors); first asks for its name |
-| F7 | Write a `.d64` from the computer to the disk: choose it with A–T (F5 chooses the drive), then Y writes it, F formats the disk first |
+| F7 | Write a `.d64` from the computer to the disk: choose it with A–T or the CRSR keys and RETURN (F5 chooses the drive), then Y writes it, F formats the disk first |
 | F1 | Read the directory again, e.g. after changing the disk |
 | F5 | Next drive: 8, 9, 10, 11, then 8 again |
 | + / - | Next / previous page |
@@ -620,7 +634,7 @@ Most responses start with a status byte: `$00` = OK, followed by the payload; `$
 | `/x` | is something pushed? 0 = no, 1 = run, 2 = save + run, 3 = show picture, 4 = play tune, 5 = save only |
 | `/x/p`, `/x/i`, `/x/s` | the pushed program, picture or tune, in the same format as `/p`, `/i` and `/s` |
 | `/h` | LOAD helper code for `$02a7` and `$0334` |
-| `/l/{folder}/{name in hex}` | a file for the LOAD helper, or only status `$01` (then the real drive is used); name `00`: the file helper, `01`: the LOAD guard, `02`: the save helper, relocated, or only an RTS at `$03fc` |
+| `/l/{folder}/{name in hex}` | a file for the LOAD helper, or only status `$01` (then the real drive is used); name `00`: the file helper, `01`: the LOAD guard, `02`: the save helper, `03`: the LOAD module, relocated, or only an RTS at `$03fc` |
 | `/f/{folder}/{chunk}/{name in hex}` | 64 bytes of a file the file helper OPENs, after a byte 1 for the last chunk (else 0); only `$02` when opened for writing; or only status `$01` |
 | `POST /a/{folder}/{part}/{name in hex}` | up to 64 bytes the file helper writes (part: bit 15 on the last one, at CLOSE; then also as GET without data) -> `$00`, or `$01` + message |
 | `/c/{folder}/{command in hex}` | a command on channel 15 -> `$00` and the drive status, e.g. `00, OK,00,00` |
@@ -647,7 +661,7 @@ Most responses start with a status byte: `$00` = OK, followed by the payload; `$
 | `$0200-$0258` | WiC64 request header and URL (BASIC input buffer); used by the LOAD helper too |
 | `$02a7-$02ff` | Message line and folder ids; part of the LOAD helper while a program runs |
 | `$0334-$03fb` | Standalone SID player or LOAD helper (both sent by the server) |
-| (free pages) | File helper (7 pages, disks with SEQ files and programs that OPEN), LOAD guard (1 page, BASIC with INPUT and LOAD) and save helper (3 pages, programs that SAVE) while a program runs; placed by the server |
+| (free pages) | File helper (7 pages, disks with SEQ files and programs that OPEN), LOAD guard (1 page, BASIC with INPUT and LOAD), save helper (3 pages, programs that SAVE) and LOAD module (2 pages, programs that overwrite the LOAD helper) while a program runs; placed by the server |
 | `$0400-$07e7` | Menu screen (row 24 = status line) |
 | `$0800-$bfff` | Free for tunes playing in the background |
 | `$0800-$cfff` | Programs are received to their load address |
@@ -671,6 +685,7 @@ c64/
   filehelper.asm           OPEN, read and write files and channel 15 on device 8 via the server (relocatable)
   loadguard.asm            keeps the LOAD helper's request safe from BASIC's INPUT (relocatable)
   savehelper.asm           SAVE to device 8 via the server (relocatable)
+  loadmodule.asm           the LOAD helper on free pages, for programs that overwrite the tape buffer (relocatable)
   plugins/disk-tools.asm   plugin: upload files and whole disks from drive 8 to the computer
   samples/hello.asm        tiny BASIC program for testing pushes
   samples/loadtest.asm     BASIC program that LOADs "HELLO" through the LOAD helper
@@ -719,7 +734,7 @@ server/                    ASP.NET Core minimal API (.NET 10)
   wwwroot/                 the web UI (index.html, ui/app.js, ui/app.css)
 content/                   your files: prg/, img/, sid/
 build/                     generated by make (browser.prg, standalone.bin, loadhelper.bin, filehelper*.bin, loadguard*.bin,
-                           savehelper*.bin, config.asm)
+                           savehelper*.bin, loadmodule*.bin, config.asm)
 ```
 
 ## Troubleshooting
@@ -750,7 +765,8 @@ build/                     generated by make (browser.prg, standalone.bin, loadh
   work when the file helper fits, and SAVE only when the save helper fits (see
   [Programs, disk images and the LOAD helper](#programs-disk-images-and-the-load-helper)).
 - **LOAD helper memory:** the helper lives in `$0200-$0258`, `$02a7-$02ff` and `$0334-$03fb`. Programs that use that
-  memory overwrite it, and their LOADs then go to the real drive or hang; the menu warns for such disk images.
+  memory get the LOAD module on free pages instead; when there are none, their LOADs go to the real drive or hang,
+  and the menu warns for such disk images.
 - **SID playback:**
   - SID files with 2 or 3 SID chips play only the first chip.
   - Tunes whose play routine needs a speed other than 50 Hz or the default CIA timer play at the wrong speed.

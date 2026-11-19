@@ -6,10 +6,13 @@
 ;
 ;   F1 / F3 / F5   programs / pictures / music
 ;   A-T            open the entry (folders and .d64 images open like folders)
+;   CRSR up/down   move the selection (past the end of a page: the next or previous page)
+;   RETURN         open the selected entry (on the info screen: back to the menu)
+;   SHIFT+RETURN   save the selected program to disk (device 8), then run it
 ;   SHIFT+A-T      save the program to disk (device 8)
-;   INST/DEL       parent folder
+;   INST/DEL, ..   parent folder
 ;   + / -          next / previous page
-;   RETURN         info about the playing tune (and back)
+;   V              info about the playing tune (and back)
 ;   SPACE          next tune
 ;   1-9            select a subtune
 ;   F7 / RUN/STOP  stop music
@@ -74,6 +77,9 @@ KEY_SHIFT_A     = $c1
 KEY_RETURN      = $0d
 KEY_DEL         = $14
 KEY_SPACE       = $20
+KEY_DOWN        = $11
+KEY_UP          = $91
+KEY_SHIFT_RETURN = $8d
 
 screen          = $0400
 status_row      = screen + 24*40
@@ -171,52 +177,42 @@ main_loop:
     jsr GETIN
     beq main_loop
 
-    cmp #KEY_F1
-    bne +
-    lda #SECTION_PROGRAMS
-    jmp open_section
-+   cmp #KEY_F3
-    bne +
-    lda #SECTION_PICTURES
-    jmp open_section
-+   cmp #KEY_F5
-    bne +
-    lda #SECTION_MUSIC
-    jmp open_section
-+   cmp #KEY_F7
+    ; keys with their own handler: a table, smaller than a compare for each. F1/F3/F5 come first: X is the section.
+    ldx #keys_end - keys - 1
+-   cmp keys,x
     beq +
-    cmp #KEY_STOP
-    bne ++
-+   jsr stop_music
+    dex
+    bpl -
+    bmi letters
++   lda handlers_high,x                 ; RTS jumps to the handler
+    pha
+    lda handlers_low,x
+    pha
+    rts
+
+stop_key:
+    jsr stop_music
     jsr show_now_playing
     jmp main_loop
-++  cmp #KEY_F2
-    bne +
-    jmp change_server
-+   cmp #'+'
-    beq next_page
-    cmp #'-'
-    beq previous_page
-    cmp #KEY_DEL
-    bne +
-    jmp parent_folder
-+   cmp #KEY_RETURN
-    bne +
-    jmp toggle_info
-+   cmp #KEY_SPACE
-    bne +
+
+space_key:
     jsr next_tune
     jmp main_loop
-+   cmp #KEY_LEFT_ARROW
-    bne +
-    jmp enter_portal
 
+set_cursor:
+    stx cursor
+    jsr apply_colors
+    jmp main_loop
+
+letters:
     ; A-T opens an entry
-+   cmp #KEY_A
+    cmp #KEY_A
     bcc +
     cmp #KEY_A+20
     bcs ++
     sbc #KEY_A-1                        ; carry is clear: subtract one less
+    ldy #MODE_RUN | MODE_HELPER
+select_and_loop:
     jsr select_entry
     jmp main_loop
 
@@ -236,18 +232,29 @@ ignore_key:
     cmp #KEY_SHIFT_A+20
     bcs ignore_key
     sbc #KEY_SHIFT_A-1                  ; carry is clear: subtract one less
-    jsr save_entry
-    jmp main_loop
+    ldy #MODE_SAVE
+    jmp select_and_loop
 
+open_section_x:
+    txa
 open_section:
     sta section
     lda #0
     sta folder
     sta folder+1
     sta page
+    sta cursor
     jsr load_menu
     jmp main_loop
 
+; CRSR down/up move the selection; past the end of a page to the next or previous page
+cursor_down:
+    ldx cursor
+    inx
+    cpx menu_count
+    bcc set_cursor
+    ldx #0
+    stx cursor
 next_page:
     lda page
     clc
@@ -259,6 +266,12 @@ next_page:
     jsr load_menu
     jmp main_loop
 
+cursor_up:
+    ldx cursor
+    dex
+    bpl set_cursor
+    ldx #19                             ; the last entry of the previous page (load_menu keeps it in range)
+    stx cursor
 previous_page:
     lda page
     bne +
@@ -276,8 +289,21 @@ parent_folder:
     sta folder+1
     lda #0
     sta page
+    sta cursor
     jsr load_menu
     jmp main_loop
+
+; RETURN opens the selected entry; on the info screen it goes back to the menu.
+; SHIFT+RETURN saves the selected program to disk, then runs it.
+return_key:
+    lda info_shown
+    bne toggle_info
+    ldy #MODE_RUN | MODE_HELPER
+    !byte $2c                           ; BIT abs: skips the next LDY
+shift_return:
+    ldy #MODE_SAVE | MODE_RUN | MODE_HELPER
+    lda cursor
+    jmp select_and_loop
 
 toggle_info:
     lda info_shown
@@ -287,7 +313,7 @@ toggle_info:
 +   jsr load_menu
     jmp main_loop
 
-; Opens entry A of the menu: a folder, or a program, picture or tune
+; Opens entry A of the menu: a folder, or a program (Y: what to do with it, MODE_*), picture or tune
 select_entry:
     cmp menu_count
     bcs ++
@@ -303,6 +329,7 @@ select_entry:
     sta folder+1
     lda #0
     sta page
+    sta cursor
     jmp load_menu
 
 +   lda section
@@ -311,25 +338,9 @@ select_entry:
     jmp show_picture
 +   bcc +
     jmp play_selected_tune
-+   lda #MODE_RUN | MODE_HELPER
++   tya
     jmp download_entry
 ++  rts
-
-; Saves program A of the menu to disk
-save_entry:
-    ldx section                         ; only programs, and not folders
-    bne +
-    cmp menu_count
-    bcs +
-    sta selected
-    asl
-    tax
-    lda menu_ids,x
-    ora menu_ids+1,x
-    bne +
-    lda #MODE_SAVE
-    jmp download_entry
-+   rts
 
 ;------------------------------------------------------------------------------
 ; F2: change the server address. The address screen is part of the startup code,
@@ -527,7 +538,13 @@ load_menu:
     sta info_shown
     lda #1
     sta polling
-    jsr apply_colors
+    lda cursor                          ; the selection within the entries (none when there are none)
+    cmp menu_count
+    bcc +
+    ldx menu_count
+    dex
+    stx cursor
++   jsr apply_colors
     jmp show_now_playing
 
 ;------------------------------------------------------------------------------
@@ -735,7 +752,8 @@ st_helper:
     lda #>load_helper
     sta LOAD_VECTOR+1
 
-    ; the file helper (file $00), the LOAD guard ($01) and the save helper ($02): the LOAD helper loads them from the server,
+    ; the file helper (file $00), the LOAD guard ($01), the save helper ($02) and the LOAD module ($03): the LOAD
+    ; helper loads them from the server,
     ; which puts them where the program leaves room (or sends only an RTS to $03fc); their last 3 bytes
     ; are their entry
 st_module:
@@ -763,7 +781,7 @@ st_install:
 st_next_module:
     inc st_module_name
     lda st_module_name
-    cmp #3
+    cmp #4
     bne st_module
 +   cli
     lda st_load+1
@@ -775,7 +793,7 @@ st_next_module:
 
 st_count:       !word 0
 st_load:        !word 0
-st_module_name: !byte 0                 ; "file name" of the file helper (0), LOAD guard (1) and save helper (2)
+st_module_name: !byte 0                 ; "file name" of the file helper (0), LOAD guard (1), save helper (2), LOAD module (3)
 }
 starter_end:
 !if starter_end - starter_image > 256 {
@@ -1362,25 +1380,38 @@ apply_colors:
     dex
     bpl -
 
-    lda info_shown                      ; entry letters: only on a menu screen
+    lda info_shown                      ; entry letters and the selection: only on a menu screen
     bne ++
-    lda #<(color_ram + 2*40 + 1)        ; entry letters: yellow (rows 2-21, column 1)
-    sta letter_color+1
+    lda #<(color_ram + 2*40 + 1)        ; rows 2-21, from column 1
+    sta row_color+1
     lda #>(color_ram + 2*40 + 1)
-    sta letter_color+2
-    ldx #20
--   lda #7
-letter_color:
-    sta $ffff
-    lda letter_color+1
+    sta row_color+2
+    ldx #0
+row_colors:
+    cpx cursor                          ; the selected entry: white
+    bne +
+    ldy #38
+    lda #1
+-   jsr row_color
+    dey
+    bne -
++   ldy #0                              ; the entry letter: yellow
+    lda #7
+    jsr row_color
+    lda row_color+1
     clc
     adc #40
-    sta letter_color+1
+    sta row_color+1
     bcc +
-    inc letter_color+2
-+   dex
-    bne -
+    inc row_color+2
++   inx
+    cpx #20
+    bne row_colors
 ++  rts
+
+row_color:
+    sta $ffff,y
+    rts
 
 clear_screen:
     ldx #0
@@ -1435,6 +1466,21 @@ show_now_playing:
 
 section_chars:  !text "pis"
 
+; The keys with their own handler, and the handlers' addresses - 1 (for RTS). F1/F3/F5 first: their index is the section.
+keys:           !byte KEY_F1, KEY_F3, KEY_F5, KEY_F7, KEY_STOP, KEY_F2, '+', '-', KEY_DEL, KEY_RETURN, KEY_SPACE
+                !byte KEY_LEFT_ARROW, KEY_DOWN, KEY_UP, 'V', KEY_SHIFT_RETURN
+keys_end:
+handlers_low:
+                !byte <(open_section_x-1), <(open_section_x-1), <(open_section_x-1), <(stop_key-1), <(stop_key-1)
+                !byte <(change_server-1), <(next_page-1), <(previous_page-1), <(parent_folder-1), <(return_key-1)
+                !byte <(space_key-1), <(enter_portal-1), <(cursor_down-1), <(cursor_up-1), <(toggle_info-1)
+                !byte <(shift_return-1)
+handlers_high:
+                !byte >(open_section_x-1), >(open_section_x-1), >(open_section_x-1), >(stop_key-1), >(stop_key-1)
+                !byte >(change_server-1), >(next_page-1), >(previous_page-1), >(parent_folder-1), >(return_key-1)
+                !byte >(space_key-1), >(enter_portal-1), >(cursor_down-1), >(cursor_up-1), >(toggle_info-1)
+                !byte >(shift_return-1)
+
 url_scheme:     !text "http://"
 url_scheme_end:
 
@@ -1468,6 +1514,7 @@ locations:
 folder:         !word 0                 ; LOCATION_MENU: what the menu shows
 page:           !byte 0
 selected:       !byte 0
+cursor:         !byte 0                 ; the selected entry (CRSR keys, RETURN)
 tune_folder:    !word 0                 ; LOCATION_TUNE: the tune that plays
 tune_page:      !byte 0
 tune_entry:     !byte 0

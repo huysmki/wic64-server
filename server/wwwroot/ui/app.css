@@ -270,6 +270,7 @@ dialog {
 dialog::backdrop { background: rgb(0 0 0 / 55%); }
 dialog h2 { margin: 0 0 14px; font: 11px/1.6 var(--pixel); color: var(--c64-white); }
 dialog p { margin: 0; }
+dialog select { width: 100%; font: inherit; padding: 6px 10px; border: none; border-radius: 0; background: var(--text); color: var(--screen); }
 dialog input {
   width: 100%; font: inherit; padding: 6px 10px; border: none; border-radius: 0;
   background: var(--text); color: var(--screen); caret-color: var(--screen);
