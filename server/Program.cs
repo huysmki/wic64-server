@@ -29,6 +29,7 @@ builder.Services
     .AddSingleton<SidService>()
     .AddSingleton<PictureService>()
     .AddSingleton<LoadService>()
+    .AddSingleton<SaveService>()
     .AddSingleton<MenuScreen>()
     .AddSingleton<DriveSession>()
     .AddSingleton<C64Endpoints>()

@@ -34,6 +34,9 @@ public sealed class MemoryScan
     /// <summary>A program calls the KERNAL LOAD ($ffd5 or $f49e), so it loads more files.</summary>
     public bool LoadsFiles { get; private set; }
 
+    /// <summary>A program calls the KERNAL SAVE ($ffd8 or $f5dd).</summary>
+    public bool SavesFiles { get; private set; }
+
     /// <summary>Programs that LOAD more files and overwrite the LOAD helper: loading may hang.</summary>
     public bool HelperAtRisk => LoadsFiles && OverwriteHelper.Count > 0;
 
@@ -58,6 +61,8 @@ public sealed class MemoryScan
             used[address >> 8] = true;
             if (prg[i] is 0x20 or 0x4c && address is 0xffd5 or 0xf49e)
                 LoadsFiles = true;
+            if (prg[i] is 0x20 or 0x4c && address is 0xffd8 or 0xf5dd)
+                SavesFiles = true;
             if (WriteOpcodes.Contains(prg[i]) && HelperAreas.Any(area => address >= area.From && address <= area.To))
                 overwrites = true;
         }
@@ -73,7 +78,7 @@ public sealed class MemoryScan
             used[page] = true;
     }
 
-    public const byte TokenInputFile = 0x84, TokenInput = 0x85, TokenLoad = 0x93;
+    public const byte TokenInputFile = 0x84, TokenInput = 0x85, TokenLoad = 0x93, TokenSave = 0x94;
     const byte TokenRem = 0x8f;
 
     /// <summary>A BASIC program: loaded at $0801, starting with a valid line link.</summary>

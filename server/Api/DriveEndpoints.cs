@@ -129,7 +129,7 @@ public sealed class DriveEndpoints(DriveSession drive, ILogger<DriveEndpoints> l
     /// The posted bytes. The WiC64 sends "--WiC64-Binary-Data\n", a Content-Disposition line and an empty line,
     /// the data, then "\r\n--WiC64-Binary-Data--\r\n". A plain (non-multipart) body is taken as is.
     /// </summary>
-    static async Task<byte[]> PostedData(HttpRequest request)
+    internal static async Task<byte[]> PostedData(HttpRequest request)
     {
         using var body = new MemoryStream();
         await request.Body.CopyToAsync(body);

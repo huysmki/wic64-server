@@ -27,9 +27,12 @@ namespace Wic64Server.Api;
 /// GET /h                              LOAD helper code for $02a7 and $0334 (c64/loadhelper.asm)
 /// GET /l/{folder}/{name}              LOAD from the helper, name in hex: .prg file, or only status $01;
 ///                                     name 00: the file helper (c64/filehelper.asm) for the starter,
-///                                     name 01: the LOAD guard (c64/loadguard.asm)
+///                                     name 01: the LOAD guard (c64/loadguard.asm), 02: the save helper
+///                                     (c64/savehelper.asm)
 /// GET /f/{folder}/{chunk}/{name}      OPEN from the file helper, name in hex: last chunk? (0/1) and up to 64 bytes
 ///                                     of the file, or only status $01
+/// POST /w/{folder}/{start}/{part}/{name}  SAVE from the save helper, name in hex, part with bit 7 on the last one:
+///                                     a part of the memory (WiC64 HTTP POST) -> status $00, or $01 + message
 /// GET /o                              the WiC64 portal (fetched from x.wic64.net), like /p
 /// GET /browser.prg                    the C64 browser itself
 /// </code>
@@ -40,6 +43,7 @@ public sealed class C64Endpoints(
     SidService sids,
     PictureService pictures,
     LoadService loads,
+    SaveService saves,
     PushQueue pushQueue,
     ActivityLog activity,
     ServerOptions options,
@@ -72,6 +76,7 @@ public sealed class C64Endpoints(
         app.MapGet("/h/{folder}", LegacyLoadHelper);
         app.MapGet("/l/{folder}/{name}", LoadFile);
         app.MapGet("/f/{folder}/{chunk}/{name}", ReadFile);
+        app.MapPost("/w/{folder}/{start}/{part}/{name}", SaveFile);
     }
 
     /// <summary>
@@ -360,6 +365,22 @@ public sealed class C64Endpoints(
         {
             log.LogWarning(e, "LOAD failed");
             return NotFound();
+        }
+    }
+
+    async Task<IResult> SaveFile(HttpRequest request, string folder, string start, string part, string name)
+    {
+        try
+        {
+            if (ParseHex(folder) is not { } f || ParseHex(start) is not { } s || ParseHex(part) is not { } p)
+                return Error("bad save request");
+            var data = await DriveEndpoints.PostedData(request);
+            return saves.Part(f, s, p, Convert.FromHexString(name), data) is { } problem ? Error(problem) : Ok();
+        }
+        catch (Exception e)
+        {
+            log.LogWarning(e, "SAVE failed");
+            return Error($"save: {e.Message}");
         }
     }
 

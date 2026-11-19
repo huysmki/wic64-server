@@ -24,7 +24,7 @@ public sealed class LoadService(Catalog catalog, ServerOptions options, Activity
     readonly Lock startedLock = new();
     (string Name, byte[] Program)? started;
     (string Key, byte[] Data)? openFile;
-    (int Page, int Pages)? fileHelperPlace; // where the file helper went, so the LOAD guard goes elsewhere
+    readonly List<(int Page, int Pages)> placed = []; // where the starter's modules went, so the next ones go elsewhere
 
     /// <summary>
     /// The helper code for $02a7 and $0334. The browser writes the request header and the URL
@@ -77,7 +77,7 @@ public sealed class LoadService(Catalog catalog, ServerOptions options, Activity
     public byte[] FileHelper(int folder)
     {
         lock (startedLock)
-            fileHelperPlace = null;
+            placed.Clear(); // the first module the starter asks for
 
         var (path, isDiskImage) = catalog.PathOf(Section.Programs, folder);
         var hasDataFiles = isDiskImage
@@ -88,7 +88,7 @@ public sealed class LoadService(Catalog catalog, ServerOptions options, Activity
             return NoModule;
 
         var (programs, _) = ProgramsAndStarted(path, isDiskImage);
-        if (Relocate("filehelper", Scan(programs)) is not { } relocated)
+        if (Relocate("filehelper", ScanBesidesPlaced(programs)) is not { } relocated)
         {
             logger.LogInformation("No free memory for the file helper in {Folder}", path);
             activity.Add("load", "No free memory for the file helper: the program can't read SEQ files from the server");
@@ -96,8 +96,6 @@ public sealed class LoadService(Catalog catalog, ServerOptions options, Activity
         }
 
         var (module, place) = relocated;
-        lock (startedLock)
-            fileHelperPlace = place;
         activity.Add("load", $"File helper for SEQ files at {Range(place)}");
         return module;
     }
@@ -124,15 +122,7 @@ public sealed class LoadService(Catalog catalog, ServerOptions options, Activity
         if (!tokens.Contains(MemoryScan.TokenLoad) || !tokens.Overlaps([MemoryScan.TokenInput, MemoryScan.TokenInputFile]))
             return NoModule;
 
-        var scan = Scan(programs);
-        lock (startedLock)
-        {
-            if (fileHelperPlace is { } fileHelper)
-                scan.Use(fileHelper.Page, fileHelper.Pages);
-            fileHelperPlace = null;
-        }
-
-        if (Relocate("loadguard", scan) is not { } relocated)
+        if (Relocate("loadguard", ScanBesidesPlaced(programs)) is not { } relocated)
         {
             activity.Add("load", "No free memory for the LOAD guard: LOADs after an INPUT may fail");
             return NoModule;
@@ -141,6 +131,46 @@ public sealed class LoadService(Catalog catalog, ServerOptions options, Activity
         var (module, place) = relocated;
         activity.Add("load", $"LOAD guard for a BASIC program with INPUT at {Range(place)}");
         return module;
+    }
+
+    /// <summary>
+    /// The save helper as a .prg, for the starter (file name $02): for programs that SAVE (the BASIC keyword, or a
+    /// call of the KERNAL's SAVE), so they save to the server. Otherwise only an RTS. On a disk image all its programs
+    /// count; in a folder only the program itself.
+    /// </summary>
+    public byte[] SaveHelper(int folder)
+    {
+        var (path, isDiskImage) = catalog.PathOf(Section.Programs, folder);
+        var (programs, startedProgram) = ProgramsAndStarted(path, isDiskImage);
+        if (startedProgram is null)
+            return NoModule;
+
+        var candidates = isDiskImage ? programs.Select(p => p.Program) : [startedProgram];
+        if (!candidates.Any(program => MemoryScan.BasicTokens(program).Contains(MemoryScan.TokenSave) || Scan([("", program)]).SavesFiles))
+            return NoModule;
+
+        if (Relocate("savehelper", ScanBesidesPlaced(programs)) is not { } relocated)
+        {
+            activity.Add("load", "No free memory for the save helper: SAVEs go to the real drive");
+            return NoModule;
+        }
+
+        var (module, place) = relocated;
+        activity.Add("load", $"Save helper at {Range(place)}: SAVE goes to {Path.GetFileName(path)}");
+        return module;
+    }
+
+    /// <summary>What the programs use, plus the pages of the modules placed before; marks the new module's pages.</summary>
+    MemoryScan ScanBesidesPlaced(IEnumerable<(string Name, byte[] Program)> programs)
+    {
+        var scan = Scan(programs);
+        lock (startedLock)
+        {
+            foreach (var (page, pages) in placed)
+                scan.Use(page, pages);
+        }
+
+        return scan;
     }
 
     static string Range((int Page, int Pages) place) => $"${place.Page << 8:x4}-${(place.Page + place.Pages << 8) - 1:x4}";
@@ -181,6 +211,8 @@ public sealed class LoadService(Catalog catalog, ServerOptions options, Activity
         }
 
         logger.LogInformation("{Name} at ${Start:x4}", name, page << 8);
+        lock (startedLock)
+            placed.Add((page, pages));
         return (result, (page, pages));
     }
 
@@ -370,6 +402,8 @@ public sealed class LoadService(Catalog catalog, ServerOptions options, Activity
             return FileHelper(folder);
         if (petsciiName is [1])
             return LoadGuard(folder);
+        if (petsciiName is [2])
+            return SaveHelper(folder);
 
         var name = StripDrive(petsciiName);
         var (path, isDiskImage) = catalog.PathOf(Section.Programs, folder);

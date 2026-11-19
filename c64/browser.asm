@@ -24,8 +24,8 @@
 ;   $0200-$0258    request header and URL (BASIC input buffer, unused)
 ;   $02a7-$02f6    message line, folder ids of the menu entries (unused area)
 ;   $0334-$03ff    standalone SID player or LOAD helper (sent by the server)
-;   (anywhere)     file helper for SEQ files and LOAD guard, fetched by the starter (c64/filehelper.asm,
-;                  c64/loadguard.asm)
+;   (anywhere)     file helper for SEQ files, LOAD guard and save helper, fetched by the starter
+;                  (c64/filehelper.asm, c64/loadguard.asm, c64/savehelper.asm)
 ;   $0400-$07e7    menu screen (row 24 is the status line)
 ;   $0801-         BASIC stub that copies the code below to $c000
 ;   $0800-$cfff    programs are received to their load address, then saved and/or started
@@ -735,7 +735,7 @@ st_helper:
     lda #>load_helper
     sta LOAD_VECTOR+1
 
-    ; the file helper (file $00) and the LOAD guard (file $01): the LOAD helper loads them from the server,
+    ; the file helper (file $00), the LOAD guard ($01) and the save helper ($02): the LOAD helper loads them from the server,
     ; which puts them where the program leaves room (or sends only an RTS to $03fc); their last 3 bytes
     ; are their entry
 st_module:
@@ -763,7 +763,7 @@ st_install:
 st_next_module:
     inc st_module_name
     lda st_module_name
-    cmp #2
+    cmp #3
     bne st_module
 +   cli
     lda st_load+1
@@ -775,7 +775,7 @@ st_next_module:
 
 st_count:       !word 0
 st_load:        !word 0
-st_module_name: !byte 0                 ; "file name" of the file helper (0) and the LOAD guard (1)
+st_module_name: !byte 0                 ; "file name" of the file helper (0), LOAD guard (1) and save helper (2)
 }
 starter_end:
 !if starter_end - starter_image > 256 {

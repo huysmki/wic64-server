@@ -70,6 +70,8 @@ screen data, drawn with the C64's character set, colors and border.
   (most original commercial disks) don't work this way; see [Games with a fast loader](#games-with-a-fast-loader).
 - **Multi-file programs:** a LOAD helper lets running programs `LOAD` more files from the server, including from
   the B side of a game, with the real drive as fallback.
+- **SAVE to the computer:** programs that `SAVE` (high scores, saved games, BASIC you write on the C64) save into
+  the folder or disk image they came from, like on a real drive.
 - **SEQ files:** on disks with SEQ or USR files, a file helper lets programs read them with `OPEN`/`INPUT#`/`GET#`,
   when the disk's programs leave room for it.
 - **Save to disk:** SHIFT+letter saves any program (also from inside a `.d64`) to drive 8, e.g. an SD2IEC.
@@ -190,6 +192,8 @@ acme -v1 -f plain -o build/filehelper.bin c64/filehelper.asm
 acme -v1 -DORIGIN=0x1100 -f plain -o build/filehelper-1100.bin c64/filehelper.asm
 acme -v1 -f plain -o build/loadguard.bin c64/loadguard.asm
 acme -v1 -DORIGIN=0x1100 -f plain -o build/loadguard-1100.bin c64/loadguard.asm
+acme -v1 -f plain -o build/savehelper.bin c64/savehelper.asm
+acme -v1 -DORIGIN=0x1100 -f plain -o build/savehelper-1100.bin c64/savehelper.asm
 acme -v1 -I c64/wic64-library -f cbm -o build/plugins/disk-tools.prg c64/plugins/disk-tools.asm
 dotnet run --project server -- --Content=content --Build=build
 ```
@@ -359,6 +363,19 @@ or `INPUT#` and `LOAD` (on a disk image: any of its BASIC programs), the server 
 (`c64/loadguard.asm`, 1 page), placed like the file helper. It keeps a copy of the request and puts it back before a
 LOAD when it was overwritten. A `LOAD` typed in direct mode after the program ends goes to the real drive: the typed
 line is in `$0200` itself.
+
+**SAVE to the computer.** Programs that `SAVE` to device 8 (the BASIC keyword, or a call of the KERNAL's SAVE; on a
+disk image: any of its programs) get a save helper (`c64/savehelper.asm`, 3 pages), placed like the file helper. It
+sends the memory to the server with the WiC64's HTTP POST, in parts of up to 32 KB:
+
+- **Into a folder:** as `name.prg`. **Into a `.d64`, `.d71` or `.d81`:** as a PRG file in the image, with its
+  directory entry and the BAM updated, like a real drive writes it. The activity log shows each SAVE.
+- A file with the same name is replaced (with or without `@0:`): games often delete the old file through the
+  command channel first, which doesn't reach the server.
+- **Backups:** before the server first saves into a disk image, it copies the original to a hidden `.backups` folder
+  next to it (e.g. `content/prg/.backups/game.d64`). Delete that copy to make a new one at the next save.
+- When the server can't save the file (disk full, a wildcard in the name), the SAVE goes to the real drive.
+- Saving SEQ files (`OPEN …,S,W`) and commands on channel 15 (like scratching a file) aren't supported yet.
 
 ### Games with a fast loader
 
@@ -554,8 +571,9 @@ Most responses start with a status byte: `$00` = OK, followed by the payload; `$
 | `/x` | is something pushed? 0 = no, 1 = run, 2 = save + run, 3 = show picture, 4 = play tune, 5 = save only |
 | `/x/p`, `/x/i`, `/x/s` | the pushed program, picture or tune, in the same format as `/p`, `/i` and `/s` |
 | `/h` | LOAD helper code for `$02a7` and `$0334` |
-| `/l/{folder}/{name in hex}` | a file for the LOAD helper, or only status `$01` (then the real drive is used); name `00`: the file helper, `01`: the LOAD guard, relocated, or only an RTS at `$03fc` |
+| `/l/{folder}/{name in hex}` | a file for the LOAD helper, or only status `$01` (then the real drive is used); name `00`: the file helper, `01`: the LOAD guard, `02`: the save helper, relocated, or only an RTS at `$03fc` |
 | `/f/{folder}/{chunk}/{name in hex}` | 64 bytes of a file the file helper OPENs, after a byte 1 for the last chunk (else 0); or only status `$01` |
+| `POST /w/{folder}/{start}/{part}/{name in hex}` | SAVE from the save helper: up to 32 KB of memory from `start` (part: bit 7 on the last one) -> `$00`, or `$01` + message |
 | `/o` | the WiC64 portal, fetched from x.wic64.net (keeps the browser small) |
 | `/browser.prg` | the browser itself |
 | `POST /d/dir` | Disk tools: the directory of drive 8 (`LOAD"$",8`) -> the directory screen and file names |
@@ -578,7 +596,7 @@ Most responses start with a status byte: `$00` = OK, followed by the payload; `$
 | `$0200-$0258` | WiC64 request header and URL (BASIC input buffer); used by the LOAD helper too |
 | `$02a7-$02ff` | Message line and folder ids; part of the LOAD helper while a program runs |
 | `$0334-$03fb` | Standalone SID player or LOAD helper (both sent by the server) |
-| (free pages) | File helper (3 pages, disks with SEQ files) and LOAD guard (1 page, BASIC with INPUT and LOAD) while a program runs; placed by the server |
+| (free pages) | File helper (3 pages, disks with SEQ files), LOAD guard (1 page, BASIC with INPUT and LOAD) and save helper (3 pages, programs that SAVE) while a program runs; placed by the server |
 | `$0400-$07e7` | Menu screen (row 24 = status line) |
 | `$0800-$bfff` | Free for tunes playing in the background |
 | `$0800-$cfff` | Programs are received to their load address |
@@ -601,6 +619,7 @@ c64/
   loadhelper.asm           LOAD from device 8 via the server, for multi-file programs
   filehelper.asm           OPEN and read SEQ files from device 8 via the server (relocatable)
   loadguard.asm            keeps the LOAD helper's request safe from BASIC's INPUT (relocatable)
+  savehelper.asm           SAVE to device 8 via the server (relocatable)
   plugins/disk-tools.asm   plugin: upload files and whole disks from drive 8 to the computer
   samples/hello.asm        tiny BASIC program for testing pushes
   samples/loadtest.asm     BASIC program that LOADs "HELLO" through the LOAD helper
@@ -617,12 +636,14 @@ server/                    ASP.NET Core minimal API (.NET 10)
   Content/
     Catalog.cs             folders and .d64 images as menu entries, folder ids
     DiskImage.cs           .d64/.d71/.d81 reader
+    DiskImageWriter.cs     writes a PRG file into a .d64/.d71/.d81: BAM, directory, data blocks
     Petscii.cs             PETSCII file names
   Programs/
     PushQueue.cs           what was pushed: a program, picture or tune
     Plugins.cs             fills in the server address in plugins
     LoadService.cs         files and directory listings for the LOAD and file helper
     MemoryScan.cs          which memory a disk's programs use; do they overwrite the LOAD helper?
+    SaveService.cs         SAVEs from the save helper: into a folder or disk image
   Pictures/
     KoalaConverter.cs      image -> multicolor bitmap (per-cell palette + dithering)
     PictureService.cs      picture cache and PNG previews
@@ -643,7 +664,7 @@ server/                    ASP.NET Core minimal API (.NET 10)
   wwwroot/                 the web UI (index.html, ui/app.js, ui/app.css)
 content/                   your files: prg/, img/, sid/
 build/                     generated by make (browser.prg, standalone.bin, loadhelper.bin, filehelper*.bin, loadguard*.bin,
-                           config.asm)
+                           savehelper*.bin, config.asm)
 ```
 
 ## Troubleshooting
@@ -670,8 +691,9 @@ build/                     generated by make (browser.prg, standalone.bin, loadh
   point.
 - **No drive emulation:** games with their own fast loader (most original commercial disks) don't run from a `.d64`;
   only files loaded through the KERNAL are served. See [Games with a fast loader](#games-with-a-fast-loader).
-- **Disk formats:** REL files, writing files, `.d81` partitions and `.t64` are not supported yet. SEQ files can only
-  be read when the file helper fits (see [SEQ files](#programs-disk-images-and-the-load-helper)).
+- **Disk formats:** REL files, writing SEQ files, `.d81` partitions and `.t64` are not supported yet. SEQ files can
+  only be read when the file helper fits, and SAVE only works when the save helper fits (see
+  [Programs, disk images and the LOAD helper](#programs-disk-images-and-the-load-helper)).
 - **LOAD helper memory:** the helper lives in `$0200-$0258`, `$02a7-$02ff` and `$0334-$03fb`. Programs that use that
   memory overwrite it, and their LOADs then go to the real drive or hang; the menu warns for such disk images.
 - **SID playback:**
@@ -682,12 +704,13 @@ build/                     generated by make (browser.prg, standalone.bin, loadh
   loading parts from the server on demand.
 - **Tested on real hardware:** browsing, running (incl. `.d64` and Bubble Bobble 2), the LOAD helper, push, saving,
   background and standalone music. Not yet: programs larger than `$c000`, auto-next after the full song length,
-  the info screen, VICE, the file helper and LOAD guard (tested in an emulator with the real KERNAL only).
+  the info screen, VICE, the save helper (tested in an emulator with the real KERNAL, and with VICE's c1541 for the
+  disk images it writes).
 
 ## Ideas for later
 
 - **Modular browser:** features loaded from the server on demand, so the C64 side can keep growing.
-- **Disk images:** `.t64`, REL files, and a writable virtual drive (SAVE to the computer).
+- **Disk images:** `.t64`, REL files, writing SEQ files, and the command channel (scratch, rename).
 - **Faster disk writing:** a small fast writer in the 1541's own memory (`M-W`/`M-E`) that receives a track with a
   fast transfer and writes it in one revolution.
 - **Search:** type a few letters to find a tune in the full High Voltage SID Collection.

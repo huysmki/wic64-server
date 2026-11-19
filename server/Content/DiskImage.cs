@@ -11,7 +11,7 @@ public sealed record DiskFile(byte[] Name, int Blocks, byte Track, byte Sector, 
 /// <summary>
 /// Reads the directory and program files of a disk image: .d64 (35 or 40 tracks), .d71 (70 tracks) or .d81 (80 tracks).
 /// </summary>
-public sealed class DiskImage
+public sealed partial class DiskImage
 {
     /// <summary>The file extensions of the disk images the server opens like folders.</summary>
     public static readonly string[] Extensions = [".d64", ".d71", ".d81"];
