@@ -110,6 +110,14 @@ public sealed class SaveService(Catalog catalog, ActivityLog activity, ILogger<S
     /// <summary>A command on channel 15; the drive status it leaves, with its RETURN.</summary>
     public byte[] Command(int folder, byte[] command)
     {
+        // Memory and block commands address the drive itself, with binary arguments: only their name is text
+        if (command is [(byte)'M' or (byte)'B', (byte)'-', ..] || command is [(byte)'U', (byte)'1' or (byte)'2' or (byte)'A' or (byte)'B', ..])
+        {
+            var name = Encoding.ASCII.GetString(command, 0, command[0] == 'U' ? 2 : 3);
+            activity.Add("error", $"The program talks to the drive itself ({name}): it has its own loader or copy protection and needs a real drive");
+            return "31,SYNTAX ERROR,00,00\r"u8.ToArray();
+        }
+
         var text = Encoding.ASCII.GetString(command).TrimEnd('\r', ' ');
         var status = RunCommand(folder, Encoding.ASCII.GetBytes(text)) ?? "00, OK,00,00";
         activity.Add("save", $"Command \"{Petscii.ToText(Encoding.ASCII.GetBytes(text))}\": {status}");

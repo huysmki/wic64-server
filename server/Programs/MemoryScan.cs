@@ -41,6 +41,8 @@ public sealed class MemoryScan
     /// <summary>A program calls the KERNAL OPEN ($ffc0 or $f34a).</summary>
     public bool OpensFiles { get; private set; }
 
+    static readonly byte[][] DriveCode = ["M-W"u8.ToArray(), "M-E"u8.ToArray(), "W-M"u8.ToArray(), "E-M"u8.ToArray()];
+
     /// <summary>A program sends code into the drive ("M-W", "M-E"): its own loader, which needs a real drive.</summary>
     public bool SendsDriveCode { get; private set; }
 
@@ -178,7 +180,8 @@ public sealed class MemoryScan
     /// </summary>
     void ScanCode(string name, byte[] prg, bool overwrites, bool references)
     {
-        if (prg.AsSpan().IndexOf("M-W"u8) >= 0 || prg.AsSpan().IndexOf("M-E"u8) >= 0)
+        // The drive's memory write and execute commands; loaders often keep them backwards
+        if (DriveCode.Any(command => prg.AsSpan().IndexOf(command) >= 0))
             SendsDriveCode = true;
         references = references && LooksLikeCode(prg);
         for (var i = 2; i + 2 < prg.Length; i++)
